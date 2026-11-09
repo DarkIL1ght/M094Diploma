@@ -106,8 +106,9 @@ while IFS='|' read -r id week title result deps; do
 **Зависит от:** $deps
 
 Готово = PR смёржен, CI зелёный, работает на staging."
-  args=(issue create --repo "$REPO" --title "$id. $title" --body "$body" --label "$role" --label "неделя-$week")
-  [[ -n "$who" ]] && args+=(--assignee "$who")
+  args=(api "repos/$REPO/issues" --silent -f "title=$id. $title" -f "body=$body"
+        -f "labels[]=$role" -f "labels[]=неделя-$week")
+  [[ -n "$who" ]] && args+=(-f "assignees[]=$who")
   run gh "${args[@]}"
   echo "создано: $id"
 done <<< "$TASKS"
