@@ -8,3 +8,17 @@
 6. После вливания задача закрывается сама (`Closes #N`) и уезжает в «Готово».
 
 Роли: Ерасыл — дизайн и часть фронтенда, Бекжан — часть фронтенда и ядро бэкенда, Дархан — инфраструктура, данные и вторая часть бэкенда.
+
+## Запуск локально
+
+Нужны Docker (compose v2) и make. На Windows make — `winget install ezwinports.make` или WSL.
+
+```
+make up      # база Postgres 18 на localhost:5433; сайт на :8080, когда есть Dockerfile; мок API (Prism) на :4010, когда есть api/openapi.yaml
+make test    # Go-тесты с этой базой
+make lint    # то же, что CI: gofmt, vet, eslint
+make down    # остановить (make reset — ещё и стереть базу)
+make help    # все команды
+```
+
+Свои пароли и порты — в `.env` (образец `.env.example`), без него работают значения по умолчанию.

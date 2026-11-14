@@ -1,0 +1,42 @@
+# S-02. Локальное окружение: make up (см. Makefile).
+# db — всегда; app — когда есть Dockerfile (B-02); mock — Prism по контракту, когда есть api/openapi.yaml (B-01).
+# Порты только на 127.0.0.1. Пароли — локальные значения по умолчанию, свои можно задать в .env (он в .gitignore).
+name: m094
+
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-m094}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-m094}
+      POSTGRES_DB: ${POSTGRES_DB:-m094}
+    ports: ["127.0.0.1:${DB_PORT:-5433}:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql  # у postgres 18 данные в подкаталоге версии, монтируем родителя
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-m094} -d ${POSTGRES_DB:-m094}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  app:
+    profiles: [app]
+    build: .
+    environment:
+      ADDR: :8080
+      DATABASE_URL: postgres://${POSTGRES_USER:-m094}:${POSTGRES_PASSWORD:-m094}@db:5432/${POSTGRES_DB:-m094}?sslmode=disable
+    ports: ["127.0.0.1:${APP_PORT:-8080}:8080"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  mock:
+    profiles: [mock]
+    image: stoplight/prism:5
+    command: mock -h 0.0.0.0 -p 4010 /api/openapi.yaml
+    volumes:
+      - ./api:/api:ro
+    ports: ["127.0.0.1:${MOCK_PORT:-4010}:4010"]
+
+volumes:
+  pgdata:

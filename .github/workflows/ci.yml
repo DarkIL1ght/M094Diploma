@@ -89,3 +89,20 @@ jobs:
           done
           docker logs app
           exit 1
+
+  compose:
+    name: make up (локальное окружение)
+    runs-on: ubuntu-latest
+    needs: go
+    steps:
+      - uses: actions/checkout@v4
+      - name: make up
+        run: make up
+      - name: База принимает подключения
+        run: docker compose exec -T db psql -U m094 -d m094 -c 'select 1'
+      - name: Логи при ошибке
+        if: failure()
+        run: docker compose logs
+      - name: make down
+        if: always()
+        run: make reset
