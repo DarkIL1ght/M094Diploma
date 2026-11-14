@@ -1,0 +1,91 @@
+# S-10. Проверки на каждый PR и пуш в main. Шаги для Go, JS и Docker включаются сами,
+# когда в репозитории появляются go.mod, web/ и Dockerfile — до этого CI просто зелёный.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go (gofmt, vet, test -race)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: m094
+          POSTGRES_PASSWORD: m094
+          POSTGRES_DB: m094_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U m094" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://m094:m094@localhost:5432/m094_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - name: Есть ли Go-код
+        id: has
+        run: echo "go=$([ -f go.mod ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v5
+        if: steps.has.outputs.go == 'yes'
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        if: steps.has.outputs.go == 'yes'
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "Не отформатировано (gofmt -w):"; echo "$out"; exit 1; fi
+      - name: go vet
+        if: steps.has.outputs.go == 'yes'
+        run: go vet ./...
+      - name: go test -race
+        if: steps.has.outputs.go == 'yes'
+        run: go test -race -count=1 ./...
+
+  js:
+    name: JS (eslint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Есть ли фронтенд
+        id: has
+        run: echo "js=$(find web -name '*.js' -not -path '*/vendor/*' 2>/dev/null | grep -q . && echo yes || echo no)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        if: steps.has.outputs.js == 'yes'
+        with:
+          node-version: 22
+      - name: eslint
+        if: steps.has.outputs.js == 'yes'
+        run: npx --yes eslint@9.39.1 web
+
+  docker:
+    name: Docker (сборка и /healthz)
+    runs-on: ubuntu-latest
+    needs: go
+    steps:
+      - uses: actions/checkout@v4
+      - name: Есть ли Dockerfile
+        id: has
+        run: echo "docker=$([ -f Dockerfile ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
+      - name: Сборка образа
+        if: steps.has.outputs.docker == 'yes'
+        run: docker build -t m094:ci .
+      - name: Сервер отвечает на /healthz
+        if: steps.has.outputs.docker == 'yes'
+        run: |
+          docker run -d --name app -p 8080:8080 -e ADDR=:8080 m094:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/healthz; then exit 0; fi
+            sleep 1
+          done
+          docker logs app
+          exit 1
