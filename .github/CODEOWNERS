@@ -1,0 +1,20 @@
+# Владельцы кода: их ревью запрашивается автоматически. Последнее совпадение важнее.
+*               @DarkIL1ght
+
+# дизайн и фронтенд
+/design/        @era0006
+/web/           @era0006 @Bekzhanizb
+
+# бэкенд: ядро (B-01..B-08) — Бекжан, остальное (B-09..B-17) — Дархан; ревью друг у друга
+/api/           @Bekzhanizb @DarkIL1ght
+/cmd/           @Bekzhanizb @DarkIL1ght
+/internal/      @Bekzhanizb @DarkIL1ght
+
+# инфраструктура и данные (S-*)
+/migrations/    @DarkIL1ght @Bekzhanizb
+/deploy/        @DarkIL1ght
+/content/       @DarkIL1ght
+/tools/         @DarkIL1ght
+/.github/       @DarkIL1ght
+/docker-compose.yml @DarkIL1ght
+/Makefile       @DarkIL1ght
