@@ -100,6 +100,15 @@ jobs:
         run: make up
       - name: База принимает подключения
         run: docker compose exec -T db psql -U m094 -d m094 -c 'select 1'
+      - name: Бэкап и проверка восстановления (S-14)
+        env:
+          COMPOSE_FILE: docker-compose.yml
+          ENV_FILE: .env.example
+          BACKUP_DIR: ${{ runner.temp }}/backups
+        run: |
+          docker compose exec -T db psql -U m094 -d m094 -c 'create table backup_probe (id int); insert into backup_probe values (1)'
+          deploy/backup.sh
+          deploy/restore-check.sh
       - name: Логи при ошибке
         if: failure()
         run: docker compose logs
