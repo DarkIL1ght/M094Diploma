@@ -1,0 +1,77 @@
+{
+  "updated": "2026-11-15",
+  "group": "M094",
+  "about": "Формат КТ в магистратуру по группе М094 «Информационные технологии». Справка и источники — docs/kt-m094.md.",
+  "source": "https://testcenter.kz/?lang=ru&page_id=16392",
+  "blocks": {
+    "english": {
+      "title": "Иностранный язык",
+      "subject": "english",
+      "tasks": 50,
+      "points_per_task": 1,
+      "threshold": 25,
+      "answers": "single",
+      "scoring": "exact"
+    },
+    "tgo": {
+      "title": "ТГО",
+      "subject": "tgo",
+      "tasks": 30,
+      "points_per_task": 1,
+      "threshold": 7,
+      "answers": "single",
+      "scoring": "exact"
+    },
+    "algorithms": {
+      "title": "Алгоритмы и структуры данных",
+      "subject": "algorithms",
+      "tasks": 30,
+      "points_per_task": 1,
+      "threshold": 7,
+      "answers": "single",
+      "scoring": "exact"
+    },
+    "databases": {
+      "title": "Базы данных",
+      "subject": "databases",
+      "tasks": 20,
+      "points_per_task": 2,
+      "threshold": 7,
+      "answers": "single_or_multi",
+      "scoring": "multi_partial"
+    }
+  },
+  "scoring_rules": {
+    "exact": "Балл за задание, если выбран верный ответ.",
+    "multi_partial": "Все верные и ни одного лишнего — полный балл (2); одна ошибка (пропущен один верный или выбран один лишний) — 1; две и больше — 0."
+  },
+  "tracks": {
+    "research": {
+      "title": "Научно-педагогическая магистратура",
+      "minutes": 235,
+      "tasks": 130,
+      "max_points": 150,
+      "pass": 75,
+      "blocks": ["english", "tgo", "algorithms", "databases"]
+    },
+    "profile": {
+      "title": "Профильная магистратура",
+      "minutes": 100,
+      "tasks": 50,
+      "max_points": 70,
+      "pass": 30,
+      "blocks": ["algorithms", "databases"]
+    }
+  },
+  "rules": {
+    "listen_max_plays": 2,
+    "calculator": true,
+    "certificate_instead_of_english": [
+      {"points": 25, "ielts": 6.0, "toefl_ibt": 60},
+      {"points": 30, "ielts": 6.5, "toefl_ibt": 79},
+      {"points": 40, "ielts": 7.0, "toefl_ibt": 94},
+      {"points": 45, "ielts": 7.5, "toefl_ibt": 102},
+      {"points": 50, "ielts": 8.0, "toefl_ibt": 110}
+    ]
+  }
+}
