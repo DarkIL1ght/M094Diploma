@@ -8,7 +8,7 @@
 flowchart LR
     browser[Браузер] --> httpapi
     subgraph adapters
-        httpapi["httpapi<br/>(роутер — B-02)"]
+        httpapi["httpapi<br/>(роутер — B-02, middleware — B-17)"]
         llm["llm<br/>Claude · Gemini · Ollama"]
         storage["хранилище (Postgres)"]
     end
@@ -36,6 +36,7 @@ flowchart LR
 | | `internal/app/tutor` | ИИ-репетитор: пока порт к модели — `Request`, `Provider`, ошибки неполного ответа `ErrCutOff`, `ErrTruncated`, `ErrBlocked`; сценарии — B-14 |
 | adapters | `internal/adapters/llm` | реализации `tutor.Provider`: потоковые ответы Claude, Gemini, Ollama (B-13) |
 | | `internal/adapters/httpapi/...` | HTTP: роутер и сервер (B-02) |
+| | `internal/adapters/httpapi/middleware` | защитные обёртки: заголовки и CSP, проверка Origin, лимит тела (B-17) |
 | | хранилище | будет в S-03 |
 | запуск | `cmd/...` | сборка зависимостей через конструкторы, конфиг — будет в B-02 |
 
@@ -58,3 +59,11 @@ flowchart LR
   остаётся в адаптере: статус — деталь транспорта.
 - **Неполный ответ — ошибка после текста.** Обрыв потока, лимит длины и остановка фильтром приходят
   последним элементом потока (`ErrCutOff`, `ErrTruncated`, `ErrBlocked`), уже отданный текст не теряется.
+- **Защитные заголовки — middleware.** `SecurityHeaders`, `CheckOrigin` и `LimitBody` оборачивают весь
+  роутер (заголовки — снаружи), поэтому действуют на каждом ответе, включая 403 и 413, и не зависят от того,
+  не забыл ли их отдельный обработчик. Следствия:
+  - CSP без `'unsafe-inline'`: во фронтенде никаких inline `<script>`, `<style>`, атрибутов `style=` и
+    `onclick=`; шрифты и библиотеки лежат у нас (`'self'`), не на CDN.
+  - POST/PUT/PATCH/DELETE без `Origin` и без `Sec-Fetch-Site` получает 403 — curl и скрипты в тестах должны
+    слать `Origin` с адресом сайта из списка разрешённых.
+  - HSTS здесь не ставим: его ставит прокси перед приложением (S-12: на общей VM это Caddy, заголовок `Strict-Transport-Security` в его блоке), где известно, что сайт работает по HTTPS.
