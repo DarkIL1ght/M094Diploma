@@ -29,4 +29,4 @@ export const routes = [
   { path: '/news', title: 'Новости и даты', section: 'plan' },
 ];
 
-export const notFound = { path: null, title: 'Страница не найдена' };
+export const notFound = { path: null, title: '404 — страница не найдена' };

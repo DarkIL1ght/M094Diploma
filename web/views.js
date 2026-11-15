@@ -53,7 +53,6 @@ export function createView(route, params) {
   content.append(heading, description);
 
   if (route === notFound) {
-    heading.textContent = '404 — страница не найдена';
     description.textContent = 'Проверьте адрес или вернитесь на главную.';
     const home = pageLink('/', 'На главную');
     home.className = 'action';
