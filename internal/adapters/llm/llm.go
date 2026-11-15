@@ -8,7 +8,8 @@
 //		send(chunk)
 //	}
 //
-// Интерфейс провайдера объявляет потребитель (B-14), здесь — общие типы запроса и разбор протоколов.
+// Адаптеры реализуют порт tutor.Provider: тип запроса и ошибки неполного ответа объявляет потребитель
+// (internal/app/tutor), здесь — только протоколы провайдеров.
 package llm
 
 import (
@@ -16,41 +17,23 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"iter"
 	"net/http"
 	"strings"
+
+	"github.com/DarkIL1ght/M094Diploma/internal/app/tutor"
 )
-
-// Role — автор реплики в истории диалога.
-type Role string
-
-const (
-	RoleUser      Role = "user"
-	RoleAssistant Role = "assistant"
-)
-
-// Message — одна реплика истории.
-type Message struct {
-	Role Role
-	Text string
-}
-
-// Request — запрос к модели, общий для всех провайдеров.
-type Request struct {
-	System    string // системный промпт; пусто — без него
-	Messages  []Message
-	MaxTokens int // ≤ 0 — по умолчанию провайдера (Claude требует поле — тогда defaultMaxTokens)
-}
 
 // Config — настройки адаптера. Пустые поля заменяются значениями по умолчанию провайдера.
 type Config struct {
-	BaseURL    string
-	APIKey     string // у Ollama не нужен
-	Model      string
-	HTTPClient *http.Client // nil — http.DefaultClient; таймаут на весь запрос оборвёт длинный ответ
+	BaseURL string
+	APIKey  string // у Ollama не нужен
+	Model   string
+	// HTTPClient — nil означает http.DefaultClient: у него нет таймаута, запрос ограничивает только ctx.
+	// Таймаут на весь запрос (Client.Timeout) оборвёт длинный ответ — лучше ResponseHeaderTimeout в Transport.
+	HTTPClient *http.Client
 }
 
 const (
@@ -58,10 +41,9 @@ const (
 	maxErrorBody     = 512 // столько байт тела ответа с ошибкой попадает в StatusError
 )
 
-// ErrCutOff — поток закрылся раньше, чем провайдер сообщил о конце ответа.
-var ErrCutOff = errors.New("поток ответа оборвался")
-
 // StatusError — провайдер ответил не-2xx. Body — начало тела ответа, обрезанное до maxErrorBody.
+// Тип остаётся в адаптере: HTTP-статус — деталь транспорта, сценариям он не нужен
+// (понятное сообщение по статусу при надобности строит HTTP-слой через errors.As).
 type StatusError struct {
 	Provider string
 	Status   int
@@ -78,7 +60,7 @@ type chatMessage struct {
 	Content string `json:"content"`
 }
 
-func chatMessages(msgs []Message) []chatMessage {
+func chatMessages(msgs []tutor.Message) []chatMessage {
 	out := make([]chatMessage, 0, len(msgs))
 	for _, m := range msgs {
 		out = append(out, chatMessage{Role: string(m.Role), Content: m.Text})

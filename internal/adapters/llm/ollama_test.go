@@ -3,9 +3,12 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/DarkIL1ght/M094Diploma/internal/app/tutor"
 )
 
 func TestOllamaStream(t *testing.T) {
@@ -14,9 +17,9 @@ func TestOllamaStream(t *testing.T) {
 {"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop"}
 `)
 	o := NewOllama(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
-	chunks, err := collect(o.Stream(context.Background(), Request{
+	chunks, err := collect(o.Stream(context.Background(), tutor.Request{
 		System:    "Ты — репетитор.",
-		Messages:  []Message{{Role: RoleUser, Text: "Привет"}},
+		Messages:  []tutor.Message{{Role: tutor.RoleUser, Text: "Привет"}},
 		MaxTokens: 200,
 	}))
 	if err != nil || strings.Join(chunks, "|") != "Привет, |мир" {
@@ -73,5 +76,27 @@ func TestOllamaStreamError(t *testing.T) {
 	}
 	if strings.Join(chunks, "") != "привет" {
 		t.Errorf("куски = %v", chunks)
+	}
+}
+
+func TestOllamaDoneReason(t *testing.T) {
+	for name, tc := range map[string]struct {
+		done string
+		want error
+	}{
+		"stop":     {`"done_reason":"stop"`, nil},
+		"length":   {`"done_reason":"length"`, tutor.ErrTruncated},
+		"без поля": {`"eval_count":3`, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := newFakeServer(t, http.StatusOK, providers[2].chunk+`{"message":{"content":""},"done":true,`+tc.done+"}\n")
+			chunks, err := collect(NewOllama(Config{BaseURL: srv.URL, HTTPClient: srv.Client()}).Stream(context.Background(), hello))
+			if !errors.Is(err, tc.want) || (tc.want == nil) != (err == nil) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+			if strings.Join(chunks, "") != "привет" {
+				t.Errorf("текст до остановки потерян: %v", chunks)
+			}
+		})
 	}
 }

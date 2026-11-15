@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"iter"
+
+	"github.com/DarkIL1ght/M094Diploma/internal/app/tutor"
 )
 
 // Claude — адаптер к Anthropic Messages API.
@@ -25,7 +27,7 @@ type claudeRequest struct {
 }
 
 // Stream отправляет запрос в /v1/messages и отдаёт текст ответа по мере генерации.
-func (c *Claude) Stream(ctx context.Context, req Request) iter.Seq2[string, error] {
+func (c *Claude) Stream(ctx context.Context, req tutor.Request) iter.Seq2[string, error] {
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 {
 		maxTokens = defaultMaxTokens
@@ -35,16 +37,29 @@ func (c *Claude) Stream(ctx context.Context, req Request) iter.Seq2[string, erro
 	return c.stream(ctx, c.base+"/v1/messages", headers, body, decodeClaude)
 }
 
+// claudeStop переводит stop_reason в ошибку неполного ответа; nil — ответ закончен нормально.
+func claudeStop(reason string) error {
+	switch reason {
+	case "max_tokens", "model_context_window_exceeded":
+		return fmt.Errorf("%w: %s", tutor.ErrTruncated, reason)
+	case "refusal":
+		return fmt.Errorf("%w: %s", tutor.ErrBlocked, reason)
+	}
+	return nil
+}
+
 // decodeClaude разбирает SSE Anthropic: текст — в content_block_delta с delta.type=text_delta,
-// конец ответа — message_stop, сбой посреди ответа — событие error.
+// причина остановки — в message_delta, конец ответа — message_stop, сбой посреди ответа — событие error.
 func decodeClaude(body io.Reader, emit func(string) bool) error {
 	finished := false
+	var stopErr error
 	err := readSSE(body, func(data []byte) (bool, error) {
 		var ev struct {
 			Type  string `json:"type"`
 			Delta struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
+				Type       string `json:"type"`
+				Text       string `json:"text"`
+				StopReason string `json:"stop_reason"`
 			} `json:"delta"`
 			Error struct {
 				Type    string `json:"type"`
@@ -59,6 +74,8 @@ func decodeClaude(body io.Reader, emit func(string) bool) error {
 			if ev.Delta.Type == "text_delta" && ev.Delta.Text != "" {
 				return emit(ev.Delta.Text), nil
 			}
+		case "message_delta":
+			stopErr = claudeStop(ev.Delta.StopReason)
 		case "message_stop":
 			finished = true
 		case "error":
@@ -66,8 +83,11 @@ func decodeClaude(body io.Reader, emit func(string) bool) error {
 		}
 		return true, nil
 	})
-	if err == nil && !finished {
-		return ErrCutOff
+	switch {
+	case err != nil:
+		return err
+	case !finished:
+		return tutor.ErrCutOff
 	}
-	return err
+	return stopErr
 }

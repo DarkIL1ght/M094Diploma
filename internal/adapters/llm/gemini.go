@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"net/url"
+
+	"github.com/DarkIL1ght/M094Diploma/internal/app/tutor"
 )
 
 // Gemini — адаптер к Gemini API (generativelanguage.googleapis.com).
@@ -37,11 +40,11 @@ type geminiRequest struct {
 }
 
 // Stream отправляет запрос в :streamGenerateContent?alt=sse и отдаёт текст ответа по мере генерации.
-func (g *Gemini) Stream(ctx context.Context, req Request) iter.Seq2[string, error] {
+func (g *Gemini) Stream(ctx context.Context, req tutor.Request) iter.Seq2[string, error] {
 	var body geminiRequest
 	for _, m := range req.Messages {
 		role := "user"
-		if m.Role == RoleAssistant {
+		if m.Role == tutor.RoleAssistant {
 			role = "model" // у Gemini ответы модели — роль model
 		}
 		body.Contents = append(body.Contents, geminiContent{Role: role, Parts: []geminiPart{{Text: m.Text}}})
@@ -52,14 +55,27 @@ func (g *Gemini) Stream(ctx context.Context, req Request) iter.Seq2[string, erro
 	if req.MaxTokens > 0 {
 		body.GenerationConfig = &geminiGenerationConfig{MaxOutputTokens: req.MaxTokens}
 	}
-	url := g.base + "/v1beta/models/" + g.model + ":streamGenerateContent?alt=sse"
-	return g.stream(ctx, url, map[string]string{"x-goog-api-key": g.key}, body, decodeGemini)
+	endpoint := g.base + "/v1beta/models/" + url.PathEscape(g.model) + ":streamGenerateContent?alt=sse"
+	return g.stream(ctx, endpoint, map[string]string{"x-goog-api-key": g.key}, body, decodeGemini)
+}
+
+// geminiFinish переводит finishReason в ошибку неполного ответа; nil — ответ закончен нормально.
+// Всё, кроме STOP и MAX_TOKENS (SAFETY, RECITATION, BLOCKLIST, OTHER…), — остановка фильтром.
+func geminiFinish(reason string) error {
+	switch reason {
+	case "STOP":
+		return nil
+	case "MAX_TOKENS":
+		return fmt.Errorf("%w: %s", tutor.ErrTruncated, reason)
+	}
+	return fmt.Errorf("%w: %s", tutor.ErrBlocked, reason)
 }
 
 // decodeGemini разбирает SSE Gemini: в каждом событии — частичный ответ, текст в
-// candidates[0].content.parts[].text; finishReason отмечает конец ответа.
+// candidates[0].content.parts[].text; finishReason отмечает конец ответа и его причину.
 func decodeGemini(body io.Reader, emit func(string) bool) error {
 	finished := false
+	var finishErr error
 	err := readSSE(body, func(data []byte) (bool, error) {
 		var ev struct {
 			Candidates []struct {
@@ -81,7 +97,7 @@ func decodeGemini(body io.Reader, emit func(string) bool) error {
 			return false, fmt.Errorf("ошибка в потоке: %d: %s", ev.Error.Code, ev.Error.Message)
 		}
 		if ev.PromptFeedback.BlockReason != "" {
-			return false, fmt.Errorf("запрос заблокирован: %s", ev.PromptFeedback.BlockReason)
+			return false, fmt.Errorf("%w: запрос заблокирован: %s", tutor.ErrBlocked, ev.PromptFeedback.BlockReason)
 		}
 		if len(ev.Candidates) == 0 {
 			return true, nil
@@ -96,12 +112,15 @@ func decodeGemini(body io.Reader, emit func(string) bool) error {
 			}
 		}
 		if cand.FinishReason != "" {
-			finished = true
+			finished, finishErr = true, geminiFinish(cand.FinishReason)
 		}
 		return true, nil
 	})
-	if err == nil && !finished {
-		return ErrCutOff
+	switch {
+	case err != nil:
+		return err
+	case !finished:
+		return tutor.ErrCutOff
 	}
-	return err
+	return finishErr
 }

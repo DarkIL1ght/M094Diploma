@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/DarkIL1ght/M094Diploma/internal/app/tutor"
 )
 
 const testKey = "secret-key-123"
@@ -46,33 +48,34 @@ func newFakeServer(t *testing.T, status int, body string) *fakeServer {
 	return f
 }
 
-// streamer — общий для всех адаптеров метод потока (интерфейс самого потребителя появится в B-14).
-type streamer interface {
-	Name() string
-	Stream(context.Context, Request) iter.Seq2[string, error]
-}
+// Все адаптеры реализуют порт тьютора.
+var (
+	_ tutor.Provider = (*Claude)(nil)
+	_ tutor.Provider = (*Gemini)(nil)
+	_ tutor.Provider = (*Ollama)(nil)
+)
 
 // provider — то, что общие тесты знают о каждом адаптере: как его создать и как выглядит
 // один кусок текста в его протоколе.
 type provider struct {
 	name  string
-	new   func(Config) streamer
+	new   func(Config) tutor.Provider
 	chunk string // одно событие потока с текстом «привет»
 }
 
 var providers = []provider{
-	{"claude", func(c Config) streamer {
+	{"claude", func(c Config) tutor.Provider {
 		return NewClaude(c)
 	}, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"привет\"}}\n\n"},
-	{"gemini", func(c Config) streamer {
+	{"gemini", func(c Config) tutor.Provider {
 		return NewGemini(c)
 	}, "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"привет\"}]}}]}\n\n"},
-	{"ollama", func(c Config) streamer {
+	{"ollama", func(c Config) tutor.Provider {
 		return NewOllama(c)
 	}, `{"message":{"role":"assistant","content":"привет"},"done":false}` + "\n"},
 }
 
-var hello = Request{Messages: []Message{{Role: RoleUser, Text: "привет"}}}
+var hello = tutor.Request{Messages: []tutor.Message{{Role: tutor.RoleUser, Text: "привет"}}}
 
 func TestName(t *testing.T) {
 	for _, p := range providers {
@@ -114,8 +117,8 @@ func TestCutOffStream(t *testing.T) {
 		t.Run(p.name, func(t *testing.T) {
 			srv := newFakeServer(t, http.StatusOK, p.chunk)
 			chunks, err := collect(p.new(Config{BaseURL: srv.URL, HTTPClient: srv.Client()}).Stream(context.Background(), hello))
-			if !errors.Is(err, ErrCutOff) {
-				t.Fatalf("err = %v, want ErrCutOff", err)
+			if !errors.Is(err, tutor.ErrCutOff) {
+				t.Fatalf("err = %v, want tutor.ErrCutOff", err)
 			}
 			if strings.Join(chunks, "") != "привет" {
 				t.Errorf("куски = %v", chunks)

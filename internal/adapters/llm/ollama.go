@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"iter"
+
+	"github.com/DarkIL1ght/M094Diploma/internal/app/tutor"
 )
 
 // Ollama — адаптер к локальному серверу Ollama.
@@ -30,7 +32,7 @@ type ollamaRequest struct {
 
 // Stream отправляет запрос в /api/chat и отдаёт текст ответа по мере генерации.
 // Системный промпт у Ollama — первая реплика с ролью system.
-func (o *Ollama) Stream(ctx context.Context, req Request) iter.Seq2[string, error] {
+func (o *Ollama) Stream(ctx context.Context, req tutor.Request) iter.Seq2[string, error] {
 	body := ollamaRequest{Model: o.model, Stream: true}
 	if req.System != "" {
 		body.Messages = append(body.Messages, chatMessage{Role: "system", Content: req.System})
@@ -42,8 +44,8 @@ func (o *Ollama) Stream(ctx context.Context, req Request) iter.Seq2[string, erro
 	return o.stream(ctx, o.base+"/api/chat", nil, body, decodeOllama)
 }
 
-// decodeOllama разбирает NDJSON Ollama: строка {message:{content}, done}; done=true — конец ответа,
-// {error} — сбой посреди ответа.
+// decodeOllama разбирает NDJSON Ollama: строка {message:{content}, done}; done=true — конец ответа
+// (done_reason "length" — обрезан по num_predict), {error} — сбой посреди ответа.
 func decodeOllama(body io.Reader, emit func(string) bool) error {
 	sc := newScanner(body)
 	for sc.Scan() {
@@ -54,8 +56,9 @@ func decodeOllama(body io.Reader, emit func(string) bool) error {
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
-			Done  bool   `json:"done"`
-			Error string `json:"error"`
+			Done       bool   `json:"done"`
+			DoneReason string `json:"done_reason"`
+			Error      string `json:"error"`
 		}
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			return fmt.Errorf("разбор строки: %w", err)
@@ -67,11 +70,14 @@ func decodeOllama(body io.Reader, emit func(string) bool) error {
 			return nil
 		}
 		if ev.Done {
+			if ev.DoneReason == "length" {
+				return fmt.Errorf("%w: %s", tutor.ErrTruncated, ev.DoneReason)
+			}
 			return nil
 		}
 	}
 	if err := sc.Err(); err != nil {
 		return err
 	}
-	return ErrCutOff
+	return tutor.ErrCutOff
 }

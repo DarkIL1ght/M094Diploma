@@ -3,9 +3,12 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/DarkIL1ght/M094Diploma/internal/app/tutor"
 )
 
 func TestClaudeStream(t *testing.T) {
@@ -32,9 +35,9 @@ data: {"type":"message_stop"}
 
 `)
 	c := NewClaude(Config{BaseURL: srv.URL + "/", APIKey: testKey, HTTPClient: srv.Client()})
-	chunks, err := collect(c.Stream(context.Background(), Request{
+	chunks, err := collect(c.Stream(context.Background(), tutor.Request{
 		System:    "Ты — репетитор.",
-		Messages:  []Message{{Role: RoleUser, Text: "Привет"}, {Role: RoleAssistant, Text: "Здравствуй"}, {Role: RoleUser, Text: "Как дела?"}},
+		Messages:  []tutor.Message{{Role: tutor.RoleUser, Text: "Привет"}, {Role: tutor.RoleAssistant, Text: "Здравствуй"}, {Role: tutor.RoleUser, Text: "Как дела?"}},
 		MaxTokens: 500,
 	}))
 	if err != nil || strings.Join(chunks, "|") != "Привет, |мир" {
@@ -93,5 +96,28 @@ func TestClaudeStreamErrorEvent(t *testing.T) {
 	}
 	if strings.Join(chunks, "") != "привет" {
 		t.Errorf("куски = %v", chunks)
+	}
+}
+
+func TestClaudeStopReason(t *testing.T) {
+	for reason, want := range map[string]error{
+		"end_turn":                      nil,
+		"stop_sequence":                 nil,
+		"max_tokens":                    tutor.ErrTruncated,
+		"model_context_window_exceeded": tutor.ErrTruncated,
+		"refusal":                       tutor.ErrBlocked,
+	} {
+		t.Run(reason, func(t *testing.T) {
+			srv := newFakeServer(t, http.StatusOK, providers[0].chunk+
+				"event: message_delta\n"+`data: {"type":"message_delta","delta":{"stop_reason":"`+reason+`"}}`+"\n\n"+
+				"event: message_stop\n"+`data: {"type":"message_stop"}`+"\n\n")
+			chunks, err := collect(NewClaude(Config{BaseURL: srv.URL, HTTPClient: srv.Client()}).Stream(context.Background(), hello))
+			if !errors.Is(err, want) || (want == nil) != (err == nil) {
+				t.Fatalf("err = %v, want %v", err, want)
+			}
+			if strings.Join(chunks, "") != "привет" {
+				t.Errorf("текст до остановки потерян: %v", chunks)
+			}
+		})
 	}
 }
