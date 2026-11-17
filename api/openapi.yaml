@@ -1,0 +1,2319 @@
+openapi: 3.0.3
+info:
+  title: ExamPrep API
+  version: 0.1.0
+  description: |
+    Контракт между фронтендом и бэкендом сайта подготовки к КТ в магистратуру (группа М094).
+    Это единственный источник правды по API: Prism по нему поднимает мок (`make up`), фронтенд пишет
+    `web/api.js` по нему же, бэкенд обязан ему соответствовать. Меняется API — меняется этот файл в том же PR.
+
+    ## Общие правила
+
+    - **Адреса и формат.** Все методы под `/api`, тела — JSON (`application/json`, UTF-8), кроме потоков ИИ (SSE).
+      `GET /healthz` — вне `/api`. Размер тела запроса — не больше 64 КиБ (`413 payload_too_large`).
+    - **Сессия без регистрации.** При первом `GET /api/me` сервер создаёт анонимную сессию и ставит cookie `sid`
+      (`HttpOnly; Secure; SameSite=Lax`, срок — 180 дней, продлевается при каждом запросе). Любой другой метод
+      без cookie отвечает `401 no_session`: фронтенд делает `GET /api/me` и повторяет запрос.
+    - **Перенос прогресса.** `POST /api/session/recovery-key` выдаёт ключ один раз (в базе — только хэш).
+      `POST /api/session/restore` на другом устройстве привязывает браузер к той же сессии и ставит cookie.
+    - **Защита от CSRF.** Изменяющие методы (`POST`, `PUT`, `PATCH`, `DELETE`) принимаются, только если `Origin`
+      совпадает с адресом сайта (иначе `403 forbidden_origin`). Это проверяет middleware из B-17.
+    - **Время.** Моменты — RFC 3339 в UTC (`2026-11-17T09:30:00Z`), календарные дни — `YYYY-MM-DD`.
+      Таймеры пробного КТ считает сервер: клиент показывает `remaining_seconds` и сверяется с `server_time`.
+    - **Идентификаторы** — непрозрачные строки. Клиент их не разбирает. Предметы имеют фиксированные коды:
+      `english`, `tgo`, `algorithms`, `databases` (как в `content/exam_config.json`).
+    - **Ошибки.** Любой неуспешный ответ — объект `Error` с кодом и текстом для людей. Коды перечислены в схеме.
+      Лимиты возвращают `429` и заголовок `Retry-After` (секунды).
+    - **Markdown.** Поля `*_md` — Markdown. В уроках несколько подряд идущих блоков кода с одинаковым
+      `group=` в строке информации (` ```python group=sort `) клиент показывает вкладками.
+    - **Потоки ИИ (SSE).** Ответ — `text/event-stream`. События: `start` → `delta`… → `done`, либо `error`
+      на любом шаге. Остановка — клиент закрывает соединение (`AbortController`), сервер отменяет запрос к модели.
+      Подробности — в описании метода `POST /api/ai/chats/{chatId}/messages`.
+    - **Пока без пагинации.** Списки небольшие; где это не так (`/api/ai/chats`), есть `limit`.
+  contact:
+    name: M094 Diploma
+    url: https://github.com/DarkIL1ght/M094Diploma
+servers:
+  - url: http://localhost:4010
+    description: Мок (Prism, `make up`)
+  - url: /
+    description: Тот же адрес, откуда открыт сайт
+security:
+  - sessionCookie: []
+tags:
+  - name: Система
+    description: Проверка живости
+  - name: Профиль
+    description: Сессия, настройки, цель дня, статистика, уведомления
+  - name: Учёба
+    description: Предметы, темы, уроки, поиск
+  - name: Тесты
+    description: Тест по теме, работа над ошибками, смешанный тест
+  - name: Практика
+    description: Счётчики, ошибки, карта дыр
+  - name: Пробный КТ
+    description: Формат, попытка с серверным таймером, итог и разбор
+  - name: Награды
+    description: Достижения, косметика, лига недели
+  - name: План и новости
+    description: План до КТ, даты и новости
+  - name: ИИ-наставник
+    description: Чаты, потоковые ответы, лимиты
+
+paths:
+  /healthz:
+    get:
+      tags: [Система]
+      summary: Проверка живости
+      description: Для Docker, мониторинга и CI. Не требует сессии.
+      operationId: healthz
+      security: []
+      responses:
+        '200':
+          description: Сервис работает
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: {type: string, enum: [ok]}
+                example: {status: ok}
+
+  # ───────────── Профиль ─────────────
+  /api/me:
+    get:
+      tags: [Профиль]
+      summary: Профиль и текущая сессия
+      description: |
+        Создаёт сессию, если cookie нет (`created: true`, ставит `sid`). Фронтенд вызывает при старте.
+        `onboarded: false` — показать «Первый вход» (X1).
+      operationId: getMe
+      security: []
+      responses:
+        '200':
+          description: Профиль
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Me'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+  /api/me/settings:
+    patch:
+      tags: [Профиль]
+      summary: Изменить настройки
+      description: "Частичное обновление. Передайте только изменяемые поля; `exam_date: null` стирает дату КТ."
+      operationId: updateSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SettingsPatch'}
+            example: {theme: dark, accent: accent-3, exam_date: '2027-06-15'}
+      responses:
+        '200':
+          description: Настройки после изменения
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Settings'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '409':
+          description: Косметика ещё не открыта (`cosmetic_locked`)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: cosmetic_locked, message: Узор откроется на уровне 10}
+  /api/me/progress:
+    delete:
+      tags: [Профиль]
+      summary: Сбросить весь прогресс
+      description: "Необратимо. Требует подтверждения в теле (`confirm: true`), чтобы случайный запрос ничего не стёр."
+      operationId: resetProgress
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm]
+              properties:
+                confirm: {type: boolean, enum: [true]}
+      responses:
+        '204': {description: "Прогресс сброшен, настройки и ключ сохранены"}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/NoSession'}
+  /api/session/recovery-key:
+    post:
+      tags: [Профиль]
+      summary: Выпустить ключ восстановления
+      description: |
+        Ключ показывается **один раз**, повторный вызов выпускает новый, а старый перестаёт работать.
+        В базе хранится только хэш.
+      operationId: createRecoveryKey
+      responses:
+        '200':
+          description: Новый ключ
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [key, issued_at]
+                properties:
+                  key: {type: string, example: K7QM-4XD9-2PNA-WT6H}
+                  issued_at: {type: string, format: date-time}
+        '401': {$ref: '#/components/responses/NoSession'}
+  /api/session/restore:
+    post:
+      tags: [Профиль]
+      summary: Перенести прогресс по ключу
+      description: |
+        Привязывает этот браузер к сессии, для которой выпущен ключ, и ставит новую cookie `sid`.
+        Если у браузера уже есть свой прогресс, фронтенд просит подтверждение (O5) до вызова: после
+        восстановления прежняя анонимная сессия будет потеряна. Неверный ключ — `404 invalid_key`;
+        после 5 неудачных попыток за 15 минут — `429 rate_limited`.
+      operationId: restoreSession
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key]
+              properties:
+                key: {type: string, minLength: 8, maxLength: 64}
+            example: {key: K7QM-4XD9-2PNA-WT6H}
+      responses:
+        '200':
+          description: Сессия восстановлена
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Me'}
+        '404':
+          description: Ключ не найден или заменён новым
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: invalid_key, message: Ключ не подошёл}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+  /api/me/stats:
+    get:
+      tags: [Профиль]
+      summary: Статистика для графиков профиля
+      operationId: getStats
+      parameters:
+        - name: days
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 90, default: 14}
+      responses:
+        '200':
+          description: Данные для трёх графиков
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Stats'}
+        '401': {$ref: '#/components/responses/NoSession'}
+  /api/me/daily:
+    get:
+      tags: [Профиль]
+      summary: Цель дня, задания и сундук
+      operationId: getDaily
+      responses:
+        '200':
+          description: Состояние на сегодня
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Daily'}
+        '401': {$ref: '#/components/responses/NoSession'}
+  /api/me/daily/chest:
+    post:
+      tags: [Профиль]
+      summary: Открыть сундук
+      description: Доступен, когда выполнены задания дня (`chest.state = ready`).
+      operationId: openChest
+      responses:
+        '200':
+          description: Награда из сундука
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChestReward'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '409':
+          description: Сундук закрыт или уже открыт (`chest_not_ready`)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: chest_not_ready, message: Сначала выполните задания дня}
+  /api/notifications:
+    get:
+      tags: [Профиль]
+      summary: Непрочитанные события
+      description: |
+        Награды, которые ещё не показаны пользователю: XP, новый уровень, достижение, сундук.
+        Фронтенд опрашивает после действий и показывает тосты (O2) и окно достижения (O3).
+        Во время пробного КТ события копятся и отдаются после него.
+      operationId: listNotifications
+      responses:
+        '200':
+          description: События по порядку появления
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: '#/components/schemas/Notification'}
+        '401': {$ref: '#/components/responses/NoSession'}
+  /api/notifications/seen:
+    post:
+      tags: [Профиль]
+      summary: Отметить события показанными
+      operationId: markNotificationsSeen
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids:
+                  type: array
+                  maxItems: 100
+                  items: {type: string}
+      responses:
+        '204': {description: Отмечено}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/NoSession'}
+
+  # ───────────── Учёба ─────────────
+  /api/subjects:
+    get:
+      tags: [Учёба]
+      summary: Предметы с прогрессом
+      operationId: listSubjects
+      responses:
+        '200':
+          description: Четыре предмета
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: '#/components/schemas/Subject'}
+        '401': {$ref: '#/components/responses/NoSession'}
+  /api/subjects/{subject}/topics:
+    get:
+      tags: [Учёба]
+      summary: Темы предмета
+      operationId: listTopics
+      parameters:
+        - {$ref: '#/components/parameters/Subject'}
+      responses:
+        '200':
+          description: Темы по порядку
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: '#/components/schemas/Topic'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/topics/{topicId}:
+    get:
+      tags: [Учёба]
+      summary: Тема с разделами
+      description: Данные для L2 «Темы предмета» (список разделов выбранной темы) и кнопки «Продолжить».
+      operationId: getTopic
+      parameters:
+        - {$ref: '#/components/parameters/TopicId'}
+      responses:
+        '200':
+          description: Тема
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TopicDetail'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/sections/{sectionId}:
+    get:
+      tags: [Учёба]
+      summary: Урок (раздел)
+      description: Текст раздела, оглавление темы, соседние разделы и отметка «Изучено» (L3).
+      operationId: getSection
+      parameters:
+        - {$ref: '#/components/parameters/SectionId'}
+      responses:
+        '200':
+          description: Раздел
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Section'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/sections/{sectionId}/studied:
+    put:
+      tags: [Учёба]
+      summary: Отметить раздел изученным или снять отметку
+      description: Идемпотентно. XP начисляется только за первую отметку раздела.
+      operationId: setSectionStudied
+      parameters:
+        - {$ref: '#/components/parameters/SectionId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [studied]
+              properties:
+                studied: {type: boolean}
+      responses:
+        '200':
+          description: Новое состояние
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [studied, xp_awarded]
+                properties:
+                  studied: {type: boolean}
+                  xp_awarded: {type: integer, minimum: 0, example: 10}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/search:
+    get:
+      tags: [Учёба]
+      summary: Поиск по разделам (Ctrl+K)
+      description: Полнотекстовый поиск по названиям и тексту разделов, с учётом редкости слов (IDF).
+      operationId: search
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: {type: string, minLength: 2, maxLength: 100}
+          example: сортировка
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 20, default: 8}
+      responses:
+        '200':
+          description: Найденные разделы по убыванию релевантности
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [query, results]
+                properties:
+                  query: {type: string}
+                  results:
+                    type: array
+                    items: {$ref: '#/components/schemas/SearchResult'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/NoSession'}
+
+  # ───────────── Тесты ─────────────
+  /api/tests:
+    post:
+      tags: [Тесты]
+      summary: Начать тест
+      description: |
+        Режимы:
+        - `topic` — вопросы одной темы (`topic_id` обязателен);
+        - `mistakes` — вопросы, в которых были ошибки (`count` необязателен, по умолчанию все, но не больше 30);
+        - `mixed` — вопросы из выбранных предметов (`subjects`, `count`, `weak_bias`).
+
+        Вопросы с общим материалом идут подряд. Верные ответы в ответе не отдаются.
+        Если есть незавершённый тест того же режима и темы, возвращается он (`200`), иначе создаётся новый (`201`).
+      operationId: createTest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TestCreate'}
+            examples:
+              topic:
+                summary: Тест по теме
+                value: {mode: topic, topic_id: topic-sorting}
+              mixed:
+                summary: Смешанный тест
+                value: {mode: mixed, subjects: [algorithms, databases], count: 20, weak_bias: true}
+      responses:
+        '200':
+          description: Продолжаем незавершённый тест
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TestAttempt'}
+        '201':
+          description: Новый тест
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TestAttempt'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: Нет подходящих вопросов, например в «ошибках» пусто (`no_questions`)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: no_questions, message: Ошибок нет}
+  /api/tests/{attemptId}:
+    get:
+      tags: [Тесты]
+      summary: Состояние теста
+      description: Вопросы и уже выбранные ответы. Нужен для продолжения после перезагрузки страницы.
+      operationId: getTest
+      parameters:
+        - {$ref: '#/components/parameters/AttemptId'}
+      responses:
+        '200':
+          description: Тест
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TestAttempt'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/tests/{attemptId}/answers/{questionId}:
+    put:
+      tags: [Тесты]
+      summary: Сохранить ответ
+      description: |
+        Вызывается сразу при выборе. Заменяет прежний ответ на этот вопрос; пустой `selected` снимает ответ.
+        Для `kind: single` в `selected` не больше одного варианта. После завершения теста — `409 attempt_finished`.
+      operationId: saveTestAnswer
+      parameters:
+        - {$ref: '#/components/parameters/AttemptId'}
+        - {$ref: '#/components/parameters/QuestionId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AnswerBody'}
+            example: {selected: [opt-a, opt-c]}
+      responses:
+        '204': {description: Ответ сохранён}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/AttemptFinished'}
+  /api/tests/{attemptId}/finish:
+    post:
+      tags: [Тесты]
+      summary: Завершить тест
+      description: Считает результат, начисляет XP и достижения, пополняет список ошибок. Повторный вызов возвращает тот же результат.
+      operationId: finishTest
+      parameters:
+        - {$ref: '#/components/parameters/AttemptId'}
+      responses:
+        '200':
+          description: Итог (T2)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TestResult'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/tests/{attemptId}/review:
+    get:
+      tags: [Тесты]
+      summary: Разбор теста
+      description: Ваш ответ, верный ответ и пояснение по каждому вопросу (T3). Только для завершённого теста, иначе `409 attempt_not_finished`.
+      operationId: getTestReview
+      parameters:
+        - {$ref: '#/components/parameters/AttemptId'}
+        - name: only_mistakes
+          in: query
+          schema: {type: boolean, default: false}
+      responses:
+        '200':
+          description: Разбор
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [attempt_id, items]
+                properties:
+                  attempt_id: {type: string}
+                  items:
+                    type: array
+                    items: {$ref: '#/components/schemas/ReviewItem'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: Тест ещё не завершён (`attempt_not_finished`)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: attempt_not_finished, message: Сначала завершите тест}
+
+  # ───────────── Практика ─────────────
+  /api/practice/summary:
+    get:
+      tags: [Практика]
+      summary: Счётчики для хаба практики
+      operationId: getPracticeSummary
+      responses:
+        '200':
+          description: Сводка (P1)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PracticeSummary'}
+        '401': {$ref: '#/components/responses/NoSession'}
+  /api/practice/mistakes:
+    get:
+      tags: [Практика]
+      summary: Список ошибок
+      description: |
+        Вопросы, на которые ответили неверно, по предметам и темам. Вопрос уходит из списка, когда на него
+        верно ответили `required_streak` раз подряд (по умолчанию 2). Начать работу над ошибками —
+        `POST /api/tests` с `mode: mistakes`.
+      operationId: listMistakes
+      responses:
+        '200':
+          description: Ошибки (P2)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Mistakes'}
+        '401': {$ref: '#/components/responses/NoSession'}
+  /api/practice/gaps:
+    get:
+      tags: [Практика]
+      summary: Карта дыр
+      description: "Точность по темам для тепловой карты «предмет × тема» (P3). `accuracy: null` — по теме ещё мало ответов."
+      operationId: getGaps
+      responses:
+        '200':
+          description: Карта
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Gaps'}
+        '401': {$ref: '#/components/responses/NoSession'}
+
+  # ───────────── Пробный КТ ─────────────
+  /api/kt/config:
+    get:
+      tags: [Пробный КТ]
+      summary: Формат КТ
+      description: Направления, блоки, баллы, пороги и правила. Отдаёт `content/exam_config.json` как есть, чтобы числа не дублировались во фронтенде.
+      operationId: getKtConfig
+      responses:
+        '200':
+          description: Конфиг
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KtConfig'}
+        '401': {$ref: '#/components/responses/NoSession'}
+  /api/kt/attempts:
+    get:
+      tags: [Пробный КТ]
+      summary: История попыток
+      operationId: listKtAttempts
+      responses:
+        '200':
+          description: "Попытки от новых к старым; незавершённая (если есть) — `active: true`"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: '#/components/schemas/KtAttemptListItem'}
+        '401': {$ref: '#/components/responses/NoSession'}
+    post:
+      tags: [Пробный КТ]
+      summary: Начать пробный КТ
+      description: |
+        Создаёт вариант по формату направления и запускает серверный таймер. Если есть незавершённая попытка,
+        вернётся `409 attempt_active` с её идентификатором в `details.attempt_id`: клиент предлагает «Продолжить».
+      operationId: createKtAttempt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [track]
+              properties:
+                track: {$ref: '#/components/schemas/Track'}
+            example: {track: research}
+      responses:
+        '201':
+          description: Попытка начата
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KtAttempt'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '409':
+          description: Уже есть незавершённая попытка (`attempt_active`)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: attempt_active, message: Есть незавершённая попытка, details: {attempt_id: kt-0f3a}}
+  /api/kt/attempts/{attemptId}:
+    get:
+      tags: [Пробный КТ]
+      summary: Состояние попытки
+      description: |
+        Сетка заданий, таймер и состояние. Нужен для продолжения после перезагрузки. Если время вышло, сервер
+        сам завершает попытку: `status: expired`, ответы сохранены.
+      operationId: getKtAttempt
+      parameters:
+        - {$ref: '#/components/parameters/AttemptId'}
+      responses:
+        '200':
+          description: Попытка
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KtAttempt'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/kt/attempts/{attemptId}/tasks/{taskId}:
+    get:
+      tags: [Пробный КТ]
+      summary: Задание
+      description: Полный текст задания. Верный ответ не отдаётся. Для аудирования есть блок `listen`.
+      operationId: getKtTask
+      parameters:
+        - {$ref: '#/components/parameters/AttemptId'}
+        - {$ref: '#/components/parameters/TaskId'}
+      responses:
+        '200':
+          description: Задание
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KtTask'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/kt/attempts/{attemptId}/tasks/{taskId}/answer:
+    put:
+      tags: [Пробный КТ]
+      summary: Сохранить ответ и отметку «вернуться»
+      description: |
+        Ответ можно менять до конца времени. Можно передать только `flagged`, тогда ответ не меняется.
+        После конца времени — `409 attempt_expired`, после завершения — `409 attempt_finished`.
+      operationId: saveKtAnswer
+      parameters:
+        - {$ref: '#/components/parameters/AttemptId'}
+        - {$ref: '#/components/parameters/TaskId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                selected:
+                  type: array
+                  maxItems: 8
+                  items: {type: string}
+                flagged: {type: boolean}
+            example: {selected: [opt-b], flagged: false}
+      responses:
+        '200':
+          description: Состояние задания в сетке и таймер
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [task, remaining_seconds]
+                properties:
+                  task: {$ref: '#/components/schemas/KtTaskSummary'}
+                  remaining_seconds: {type: integer, minimum: 0, example: 4210}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/AttemptFinished'}
+  /api/kt/attempts/{attemptId}/tasks/{taskId}/listen:
+    post:
+      tags: [Пробный КТ]
+      summary: Засчитать прослушивание
+      description: |
+        Клиент вызывает перед воспроизведением (Web Speech API). Сервер считает прослушивания: больше
+        `rules.listen_max_plays` не разрешает (`409 listen_limit`). В разборе после экзамена лимита нет.
+      operationId: playKtListening
+      parameters:
+        - {$ref: '#/components/parameters/AttemptId'}
+        - {$ref: '#/components/parameters/TaskId'}
+      responses:
+        '200':
+          description: Прослушивание разрешено
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [plays_left]
+                properties:
+                  plays_left: {type: integer, minimum: 0, example: 1}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: Лимит прослушиваний исчерпан (`listen_limit`) или попытка закончена
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: listen_limit, message: Прослушиваний больше нет}
+  /api/kt/attempts/{attemptId}/finish:
+    post:
+      tags: [Пробный КТ]
+      summary: Завершить досрочно
+      description: "Идемпотентно: для уже завершённой или истёкшей попытки возвращает её итог."
+      operationId: finishKtAttempt
+      parameters:
+        - {$ref: '#/components/parameters/AttemptId'}
+      responses:
+        '200':
+          description: Итог (K4)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KtResult'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/kt/attempts/{attemptId}/result:
+    get:
+      tags: [Пробный КТ]
+      summary: Итог попытки
+      description: Баллы по блокам против порогов (K4). Пока попытка идёт — `409 attempt_not_finished`.
+      operationId: getKtResult
+      parameters:
+        - {$ref: '#/components/parameters/AttemptId'}
+      responses:
+        '200':
+          description: Итог
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KtResult'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: Попытка ещё идёт (`attempt_not_finished`)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: attempt_not_finished, message: Экзамен ещё идёт}
+  /api/kt/attempts/{attemptId}/review:
+    get:
+      tags: [Пробный КТ]
+      summary: Разбор попытки
+      description: Задания по блокам с верными ответами и пояснениями (K5). Только после завершения.
+      operationId: getKtReview
+      parameters:
+        - {$ref: '#/components/parameters/AttemptId'}
+        - name: block
+          in: query
+          description: Только один блок
+          schema: {$ref: '#/components/schemas/BlockKey'}
+        - name: only_mistakes
+          in: query
+          schema: {type: boolean, default: false}
+      responses:
+        '200':
+          description: Разбор
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [attempt_id, items]
+                properties:
+                  attempt_id: {type: string}
+                  items:
+                    type: array
+                    items: {$ref: '#/components/schemas/ReviewItem'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: Попытка ещё идёт (`attempt_not_finished`)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: attempt_not_finished, message: Экзамен ещё идёт}
+
+  # ───────────── Награды ─────────────
+  /api/achievements:
+    get:
+      tags: [Награды]
+      summary: Достижения
+      description: "Уровни I–V и прогресс. Скрытое достижение, пока не получено, приходит без названия и описания (`hidden: true`)."
+      operationId: listAchievements
+      responses:
+        '200':
+          description: Все достижения
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: '#/components/schemas/Achievement'}
+        '401': {$ref: '#/components/responses/NoSession'}
+  /api/cosmetics:
+    get:
+      tags: [Награды]
+      summary: Косметика
+      description: Акценты, узоры фона и рамки аватара. Применить — `PATCH /api/me/settings`.
+      operationId: listCosmetics
+      responses:
+        '200':
+          description: Все предметы
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: '#/components/schemas/Cosmetic'}
+        '401': {$ref: '#/components/responses/NoSession'}
+  /api/league:
+    get:
+      tags: [Награды]
+      summary: Лига недели
+      description: Рейтинг по XP за текущую неделю. Данные кэшируются на сервере до минуты.
+      operationId: getLeague
+      responses:
+        '200':
+          description: Таблица лиги
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/League'}
+        '401': {$ref: '#/components/responses/NoSession'}
+
+  # ───────────── План и новости ─────────────
+  /api/plan:
+    get:
+      tags: [План и новости]
+      summary: План до КТ
+      description: |
+        План по дням от сегодня до `exam_date`. Если даты КТ нет, `exam_date: null` и `days: []`:
+        фронтенд показывает форму выбора даты (`PATCH /api/me/settings`).
+      operationId: getPlan
+      responses:
+        '200':
+          description: План
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Plan'}
+        '401': {$ref: '#/components/responses/NoSession'}
+  /api/plan/tasks/{taskId}:
+    put:
+      tags: [План и новости]
+      summary: Отметить задачу плана
+      operationId: setPlanTaskDone
+      parameters:
+        - {$ref: '#/components/parameters/TaskId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [done]
+              properties:
+                done: {type: boolean}
+      responses:
+        '200':
+          description: Задача после изменения
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PlanTask'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/plan/recalculate:
+    post:
+      tags: [План и новости]
+      summary: Пересчитать план
+      description: Перераспределяет невыполненное по оставшимся дням (после пропусков или смены даты КТ).
+      operationId: recalculatePlan
+      responses:
+        '200':
+          description: Новый план
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Plan'}
+        '401': {$ref: '#/components/responses/NoSession'}
+  /api/news:
+    get:
+      tags: [План и новости]
+      summary: Даты КТ и новости
+      description: Данные из `content/news.json` плюс ближайшая дата КТ для обратного отсчёта (N2, H1). Не зависит от сессии.
+      operationId: getNews
+      security: []
+      responses:
+        '200':
+          description: Даты и лента
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/NewsFeed'}
+
+  # ───────────── ИИ-наставник ─────────────
+  /api/ai/limits:
+    get:
+      tags: [ИИ-наставник]
+      summary: Остаток запросов к ИИ
+      operationId: getAiLimits
+      responses:
+        '200':
+          description: Лимит на сутки
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AiLimits'}
+        '401': {$ref: '#/components/responses/NoSession'}
+  /api/ai/chats:
+    get:
+      tags: [ИИ-наставник]
+      summary: История чатов
+      operationId: listChats
+      parameters:
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+        - name: before
+          in: query
+          description: Вернуть чаты старше этого момента (для подгрузки)
+          schema: {type: string, format: date-time}
+      responses:
+        '200':
+          description: Чаты от новых к старым
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: '#/components/schemas/Chat'}
+        '401': {$ref: '#/components/responses/NoSession'}
+    post:
+      tags: [ИИ-наставник]
+      summary: Создать чат
+      description: "Необязательный контекст: раздел урока или вопрос теста. Название чата сервер даёт по первому вопросу."
+      operationId: createChat
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                context: {$ref: '#/components/schemas/AiContext'}
+      responses:
+        '201':
+          description: Чат создан
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Chat'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/NoSession'}
+  /api/ai/chats/{chatId}:
+    get:
+      tags: [ИИ-наставник]
+      summary: Чат с сообщениями
+      operationId: getChat
+      parameters:
+        - {$ref: '#/components/parameters/ChatId'}
+      responses:
+        '200':
+          description: Чат и все сообщения
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChatDetail'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [ИИ-наставник]
+      summary: Переименовать чат
+      operationId: renameChat
+      parameters:
+        - {$ref: '#/components/parameters/ChatId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: {type: string, minLength: 1, maxLength: 80}
+            example: {title: Быстрая сортировка}
+      responses:
+        '200':
+          description: Чат
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Chat'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    delete:
+      tags: [ИИ-наставник]
+      summary: Удалить чат
+      operationId: deleteChat
+      parameters:
+        - {$ref: '#/components/parameters/ChatId'}
+      responses:
+        '204': {description: Чат удалён}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/ai/chats/{chatId}/messages:
+    post:
+      tags: [ИИ-наставник]
+      summary: Задать вопрос (ответ потоком)
+      description: |
+        Ответ — `text/event-stream`. Клиент читает его через `fetch`, а не `EventSource` (нужен `POST`).
+
+        | Событие | Данные (JSON) | Когда |
+        |---|---|---|
+        | `start` | `{"chat_id", "message_id"}` | ответ принят, начинаем |
+        | `delta` | `{"text"}` | очередной кусок текста |
+        | `done` | `{"finish": "stop"\|"truncated"\|"blocked", "lesson_links": [...], "remaining": N}` | ответ закончен |
+        | `error` | `{"code", "message"}` | сбой после начала потока |
+
+        Ошибки до начала потока приходят обычным JSON-ответом: `429 ai_limit` (лимит суток исчерпан, есть `Retry-After`),
+        `503 ai_unavailable` (провайдер недоступен). Если поток оборвался, уже полученный текст сохраняется
+        в чате с пометкой, клиент предлагает «Повторить». Остановка кнопкой «Стоп» — закрытие соединения клиентом.
+        `finish: truncated` — ответ обрезан по длине, `blocked` — остановлен фильтром модели.
+      operationId: sendChatMessage
+      parameters:
+        - {$ref: '#/components/parameters/ChatId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ChatMessageCreate'}
+            example: {text: "Почему быстрая сортировка в худшем случае O(n²)?", context: {type: section, id: section-quicksort}}
+      responses:
+        '200':
+          description: Поток событий
+          content:
+            text/event-stream:
+              schema: {type: string}
+              example: |
+                event: start
+                data: {"chat_id":"chat-1","message_id":"msg-2"}
+
+                event: delta
+                data: {"text":"Если опорный элемент всегда "}
+
+                event: delta
+                data: {"text":"крайний, разделение даёт перекос."}
+
+                event: done
+                data: {"finish":"stop","lesson_links":[{"section_id":"section-quicksort","title":"Быстрая сортировка"}],"remaining":19}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/AiLimit'}
+        '503':
+          description: Провайдер ИИ недоступен (`ai_unavailable`)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: ai_unavailable, message: "ИИ сейчас недоступен, попробуйте позже"}
+  /api/ai/explain:
+    post:
+      tags: [ИИ-наставник]
+      summary: Объяснить ошибку (ответ потоком)
+      description: |
+        Кнопка «Объяснить ошибку» в разборе. Если для этого вопроса и этих неверных вариантов объяснение уже
+        есть в кэше, оно приходит тем же потоком, но не списывает лимит (`remaining` не меняется).
+        Создаёт новый чат с контекстом-вопросом; его идентификатор — в событии `start`. События и ошибки —
+        как в `POST /api/ai/chats/{chatId}/messages`.
+      operationId: explainMistake
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [attempt_id, question_id]
+              properties:
+                attempt_id: {type: string, description: Идентификатор теста или попытки КТ}
+                question_id: {type: string}
+            example: {attempt_id: test-77, question_id: q-120}
+      responses:
+        '200':
+          description: Поток событий (формат как у сообщений чата)
+          content:
+            text/event-stream:
+              schema: {type: string}
+              example: |
+                event: start
+                data: {"chat_id":"chat-9","message_id":"msg-1"}
+
+                event: delta
+                data: {"text":"Вы выбрали пузырьковую сортировку, но её средняя сложность — O(n²)."}
+
+                event: done
+                data: {"finish":"stop","lesson_links":[],"remaining":19}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/NoSession'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/AiLimit'}
+        '503':
+          description: Провайдер ИИ недоступен (`ai_unavailable`)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: ai_unavailable, message: "ИИ сейчас недоступен, попробуйте позже"}
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: sid
+      description: Анонимная сессия. Создаётся в `GET /api/me`, переносится ключом восстановления.
+
+  parameters:
+    Subject:
+      name: subject
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/SubjectId'}
+    TopicId:
+      name: topicId
+      in: path
+      required: true
+      schema: {type: string, example: topic-sorting}
+    SectionId:
+      name: sectionId
+      in: path
+      required: true
+      schema: {type: string, example: section-quicksort}
+    AttemptId:
+      name: attemptId
+      in: path
+      required: true
+      schema: {type: string, example: test-77}
+    QuestionId:
+      name: questionId
+      in: path
+      required: true
+      schema: {type: string, example: q-120}
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema: {type: string, example: task-12}
+    ChatId:
+      name: chatId
+      in: path
+      required: true
+      schema: {type: string, example: chat-1}
+
+  responses:
+    BadRequest:
+      description: Неверный запрос (`bad_request`)
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {code: bad_request, message: Поле count должно быть от 1 до 50}
+    NoSession:
+      description: Нет cookie сессии (`no_session`). Вызовите `GET /api/me` и повторите запрос.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {code: no_session, message: Сессия не найдена}
+    NotFound:
+      description: Не найдено (`not_found`). Чужие и несуществующие объекты неотличимы.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {code: not_found, message: Не найдено}
+    AttemptFinished:
+      description: Попытка закончена (`attempt_finished`) или время вышло (`attempt_expired`)
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {code: attempt_expired, message: Время вышло}
+    TooManyRequests:
+      description: Слишком часто (`rate_limited`)
+      headers:
+        Retry-After: {$ref: '#/components/headers/RetryAfter'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {code: rate_limited, message: Слишком много запросов}
+    AiLimit:
+      description: Суточный лимит запросов к ИИ исчерпан (`ai_limit`)
+      headers:
+        Retry-After: {$ref: '#/components/headers/RetryAfter'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {code: ai_limit, message: Лимит на сегодня исчерпан, details: {limit: 20, resets_at: '2026-11-18T00:00:00Z'}}
+
+  headers:
+    RetryAfter:
+      description: Через сколько секунд повторить
+      schema: {type: integer, minimum: 0, example: 3600}
+
+  schemas:
+    # ── общее ──
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Машинный код, по нему клиент выбирает поведение
+          enum:
+            - bad_request
+            - no_session
+            - forbidden_origin
+            - not_found
+            - invalid_key
+            - rate_limited
+            - payload_too_large
+            - cosmetic_locked
+            - chest_not_ready
+            - no_questions
+            - attempt_finished
+            - attempt_expired
+            - attempt_not_finished
+            - attempt_active
+            - listen_limit
+            - ai_limit
+            - ai_unavailable
+            - internal
+        message: {type: string, description: Текст для показа пользователю (по-русски)}
+        details:
+          type: object
+          additionalProperties: true
+          description: Дополнительные данные, зависят от кода
+      example: {code: not_found, message: Не найдено}
+    SubjectId:
+      type: string
+      enum: [english, tgo, algorithms, databases]
+    Track:
+      type: string
+      description: Направление КТ — `research` (научно-педагогическая), `profile` (профильная магистратура)
+      enum: [research, profile]
+    BlockKey:
+      type: string
+      description: Блок КТ из `content/exam_config.json`
+      enum: [english, tgo, algorithms, databases]
+    CodeSnippet:
+      type: object
+      required: [lang, source]
+      properties:
+        lang: {type: string, example: python}
+        source: {type: string, example: "def f(xs):\n    return sorted(xs)"}
+
+    # ── профиль ──
+    Settings:
+      type: object
+      required: [theme, accent, pattern, avatar_frame, focus_mode, exam_date, daily_goal]
+      properties:
+        theme: {type: string, enum: [light, dark, system]}
+        accent: {type: string, description: "Идентификатор акцента из `/api/cosmetics`, example: accent-1"}
+        pattern: {type: string, description: "Идентификатор узора фона, example: pattern-1"}
+        avatar_frame: {type: string, nullable: true, example: null}
+        focus_mode: {type: boolean, description: Режим фокуса в уроке по умолчанию}
+        exam_date: {type: string, format: date, nullable: true, example: '2027-06-15'}
+        daily_goal: {$ref: '#/components/schemas/DailyGoalSetting'}
+      example:
+        theme: system
+        accent: accent-1
+        pattern: pattern-1
+        avatar_frame: null
+        focus_mode: false
+        exam_date: '2027-06-15'
+        daily_goal: {type: minutes, value: 30}
+    DailyGoalSetting:
+      type: object
+      required: [type, value]
+      properties:
+        type: {type: string, enum: [minutes, xp]}
+        value: {type: integer, minimum: 5, maximum: 600}
+    SettingsPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        theme: {type: string, enum: [light, dark, system]}
+        accent: {type: string}
+        pattern: {type: string}
+        avatar_frame: {type: string, nullable: true}
+        focus_mode: {type: boolean}
+        exam_date: {type: string, format: date, nullable: true}
+        daily_goal: {$ref: '#/components/schemas/DailyGoalSetting'}
+        onboarded: {type: boolean, description: Первый вход пройден или пропущен}
+    Me:
+      type: object
+      required: [created, onboarded, display_name, level, xp, xp_to_next, streak_days, best_streak, settings]
+      properties:
+        created: {type: boolean, description: Сессия создана этим запросом}
+        onboarded: {type: boolean, description: false — показать «Первый вход»}
+        display_name: {type: string, description: "Случайный ник для лиги, example: Быстрый Барс"}
+        level: {type: integer, minimum: 1, example: 7}
+        xp: {type: integer, minimum: 0, description: "Всего XP, example: 1240"}
+        xp_to_next: {type: integer, minimum: 0, description: "Сколько XP осталось до следующего уровня, example: 160"}
+        streak_days: {type: integer, minimum: 0, example: 5}
+        best_streak: {type: integer, minimum: 0, example: 12}
+        settings: {$ref: '#/components/schemas/Settings'}
+      example:
+        created: false
+        onboarded: true
+        display_name: Быстрый Барс
+        level: 7
+        xp: 1240
+        xp_to_next: 160
+        streak_days: 5
+        best_streak: 12
+        settings:
+          theme: system
+          accent: accent-1
+          pattern: pattern-1
+          avatar_frame: null
+          focus_mode: false
+          exam_date: '2027-06-15'
+          daily_goal: {type: minutes, value: 30}
+    Stats:
+      type: object
+      required: [days, accuracy_by_subject]
+      properties:
+        days:
+          type: array
+          description: По одному элементу на день, от старых к новым, пропусков нет
+          items:
+            type: object
+            required: [date, xp, minutes]
+            properties:
+              date: {type: string, format: date}
+              xp: {type: integer, minimum: 0}
+              minutes: {type: integer, minimum: 0}
+        accuracy_by_subject:
+          type: array
+          items:
+            type: object
+            required: [subject, accuracy, answered]
+            properties:
+              subject: {$ref: '#/components/schemas/SubjectId'}
+              accuracy: {type: number, format: float, minimum: 0, maximum: 1, nullable: true, description: "Доля верных ответов, null — нет ответов"}
+              answered: {type: integer, minimum: 0}
+      example:
+        days:
+          - {date: '2026-11-16', xp: 120, minutes: 35}
+          - {date: '2026-11-17', xp: 60, minutes: 18}
+        accuracy_by_subject:
+          - {subject: algorithms, accuracy: 0.71, answered: 140}
+          - {subject: tgo, accuracy: null, answered: 0}
+    Daily:
+      type: object
+      required: [goal, progress, tasks, chest]
+      properties:
+        goal: {$ref: '#/components/schemas/DailyGoalSetting'}
+        progress:
+          type: object
+          required: [value, percent]
+          properties:
+            value: {type: integer, minimum: 0, description: "Сделано в единицах цели, example: 18"}
+            percent: {type: integer, minimum: 0, maximum: 100, example: 60}
+        tasks:
+          type: array
+          items:
+            type: object
+            required: [id, title, done, xp]
+            properties:
+              id: {type: string}
+              title: {type: string}
+              done: {type: boolean}
+              xp: {type: integer, minimum: 0}
+        chest:
+          type: object
+          required: [state, tasks_done, tasks_total]
+          properties:
+            state: {type: string, enum: [locked, ready, opened]}
+            tasks_done: {type: integer, minimum: 0}
+            tasks_total: {type: integer, minimum: 0}
+      example:
+        goal: {type: minutes, value: 30}
+        progress: {value: 18, percent: 60}
+        tasks:
+          - {id: dt-1, title: Решить 10 вопросов, done: true, xp: 20}
+          - {id: dt-2, title: Изучить 2 раздела, done: false, xp: 20}
+        chest: {state: locked, tasks_done: 1, tasks_total: 3}
+    ChestReward:
+      type: object
+      required: [xp, cosmetic_id]
+      properties:
+        xp: {type: integer, minimum: 0, example: 50}
+        cosmetic_id: {type: string, nullable: true, description: "Выпавший предмет косметики, example: null"}
+    Notification:
+      type: object
+      required: [id, type, created_at]
+      properties:
+        id: {type: string}
+        type: {type: string, enum: [xp, level_up, achievement, chest_ready, cosmetic_unlocked]}
+        created_at: {type: string, format: date-time}
+        xp: {type: integer, description: Для `xp` и `level_up`}
+        level: {type: integer, description: "Новый уровень, для `level_up`"}
+        achievement: {$ref: '#/components/schemas/AchievementUnlock'}
+        cosmetic_id: {type: string}
+      example:
+        id: n-1
+        type: achievement
+        created_at: '2026-11-17T09:30:00Z'
+        achievement: {id: streak, title: Серия, level: 2}
+
+    # ── учёба ──
+    Subject:
+      type: object
+      required: [id, title, topics_total, topics_done, accuracy]
+      properties:
+        id: {$ref: '#/components/schemas/SubjectId'}
+        title: {type: string, example: Алгоритмы и структуры данных}
+        topics_total: {type: integer, example: 14}
+        topics_done: {type: integer, example: 9}
+        accuracy: {type: number, format: float, minimum: 0, maximum: 1, nullable: true, example: 0.64}
+      example: {id: algorithms, title: Алгоритмы и структуры данных, topics_total: 14, topics_done: 9, accuracy: 0.64}
+    Topic:
+      type: object
+      required: [id, subject, title, position, status, sections_total, sections_done, accuracy]
+      properties:
+        id: {type: string, example: topic-sorting}
+        subject: {$ref: '#/components/schemas/SubjectId'}
+        title: {type: string, example: Сортировки}
+        position: {type: integer, minimum: 1, example: 2}
+        status:
+          type: string
+          description: '`gap` — «дыра»: ответов достаточно, а точность ниже порога (50 %)'
+          enum: [not_started, in_progress, done, gap]
+        sections_total: {type: integer, example: 7}
+        sections_done: {type: integer, example: 3}
+        accuracy: {type: number, format: float, minimum: 0, maximum: 1, nullable: true, example: 0.71}
+      example:
+        id: topic-sorting
+        subject: algorithms
+        title: Сортировки
+        position: 2
+        status: in_progress
+        sections_total: 7
+        sections_done: 3
+        accuracy: 0.71
+    TopicDetail:
+      allOf:
+        - $ref: '#/components/schemas/Topic'
+        - type: object
+          required: [sections, continue_section_id]
+          properties:
+            sections:
+              type: array
+              items:
+                type: object
+                required: [id, title, position, studied]
+                properties:
+                  id: {type: string}
+                  title: {type: string}
+                  position: {type: integer, minimum: 1}
+                  studied: {type: boolean}
+            continue_section_id: {type: string, nullable: true, description: Первый неизученный раздел для кнопки «Продолжить»}
+      example:
+        id: topic-sorting
+        subject: algorithms
+        title: Сортировки
+        position: 2
+        status: in_progress
+        sections_total: 7
+        sections_done: 3
+        accuracy: 0.71
+        sections:
+          - {id: section-bubble, title: Сортировка пузырьком, position: 2, studied: true}
+          - {id: section-quicksort, title: Быстрая сортировка, position: 3, studied: false}
+        continue_section_id: section-quicksort
+    Section:
+      type: object
+      required: [id, topic_id, subject, title, position, body_md, studied, prev_section_id, next_section_id, toc]
+      properties:
+        id: {type: string}
+        topic_id: {type: string}
+        subject: {$ref: '#/components/schemas/SubjectId'}
+        title: {type: string}
+        position: {type: integer, minimum: 1}
+        body_md: {type: string}
+        studied: {type: boolean}
+        prev_section_id: {type: string, nullable: true}
+        next_section_id: {type: string, nullable: true}
+        toc:
+          type: array
+          description: Оглавление темы
+          items:
+            type: object
+            required: [id, title, studied]
+            properties:
+              id: {type: string}
+              title: {type: string}
+              studied: {type: boolean}
+      example:
+        id: section-quicksort
+        topic_id: topic-sorting
+        subject: algorithms
+        title: Быстрая сортировка
+        position: 3
+        body_md: "Алгоритм выбирает **опорный элемент** и разделяет массив на две части.\n\n```python group=qs\ndef quicksort(xs):\n    return xs\n```\n\n```cpp group=qs\nvoid quicksort(vector<int>& xs);\n```"
+        studied: false
+        prev_section_id: section-bubble
+        next_section_id: section-merge
+        toc:
+          - {id: section-bubble, title: Сортировка пузырьком, studied: true}
+          - {id: section-quicksort, title: Быстрая сортировка, studied: false}
+    SearchResult:
+      type: object
+      required: [section_id, title, topic_id, topic_title, subject, snippet]
+      properties:
+        section_id: {type: string}
+        title: {type: string}
+        topic_id: {type: string}
+        topic_title: {type: string}
+        subject: {$ref: '#/components/schemas/SubjectId'}
+        snippet: {type: string, description: "Фрагмент текста вокруг совпадения, без разметки"}
+      example:
+        section_id: section-quicksort
+        title: Быстрая сортировка
+        topic_id: topic-sorting
+        topic_title: Сортировки
+        subject: algorithms
+        snippet: Алгоритм выбирает опорный элемент и разделяет массив…
+
+    # ── вопросы и тесты ──
+    Option:
+      type: object
+      required: [id, text_md]
+      properties:
+        id: {type: string, example: opt-a}
+        text_md: {type: string, example: Быстрая сортировка}
+    SharedMaterial:
+      type: object
+      description: Общий текст или таблица к группе вопросов
+      required: [id, body_md]
+      properties:
+        id: {type: string}
+        body_md: {type: string}
+    Question:
+      type: object
+      required: [id, subject, topic_id, kind, text_md, options]
+      properties:
+        id: {type: string, example: q-120}
+        subject: {$ref: '#/components/schemas/SubjectId'}
+        topic_id: {type: string, nullable: true}
+        kind: {type: string, enum: [single, multiple], description: Один ответ или несколько}
+        text_md: {type: string}
+        code: {type: object, nullable: true, allOf: [{$ref: '#/components/schemas/CodeSnippet'}]}
+        shared_material: {type: object, nullable: true, allOf: [{$ref: '#/components/schemas/SharedMaterial'}]}
+        options:
+          type: array
+          minItems: 2
+          items: {$ref: '#/components/schemas/Option'}
+      example:
+        id: q-120
+        subject: algorithms
+        topic_id: topic-sorting
+        kind: multiple
+        text_md: Какие сортировки имеют среднюю сложность O(n log n)?
+        code: null
+        shared_material: null
+        options:
+          - {id: opt-a, text_md: Быстрая сортировка}
+          - {id: opt-b, text_md: Сортировка пузырьком}
+          - {id: opt-c, text_md: Сортировка слиянием}
+          - {id: opt-d, text_md: Сортировка вставками}
+    TestCreate:
+      type: object
+      required: [mode]
+      properties:
+        mode: {type: string, enum: [topic, mistakes, mixed]}
+        topic_id: {type: string, description: Обязателен для `topic`}
+        subjects:
+          type: array
+          description: Для `mixed`; по умолчанию все предметы
+          items: {$ref: '#/components/schemas/SubjectId'}
+        count: {type: integer, minimum: 1, maximum: 50}
+        weak_bias: {type: boolean, description: Для `mixed` — больше вопросов из слабых тем}
+    TestAttempt:
+      type: object
+      required: [id, mode, title, status, started_at, questions, answers]
+      properties:
+        id: {type: string, example: test-77}
+        mode: {type: string, enum: [topic, mistakes, mixed]}
+        title: {type: string, example: Тест по теме «Сортировки»}
+        status: {type: string, enum: [active, finished]}
+        started_at: {type: string, format: date-time}
+        questions:
+          type: array
+          items: {$ref: '#/components/schemas/Question'}
+        answers:
+          type: object
+          description: Выбранные варианты по идентификатору вопроса
+          additionalProperties:
+            type: array
+            items: {type: string}
+      example:
+        id: test-77
+        mode: topic
+        title: Тест по теме «Сортировки»
+        status: active
+        started_at: '2026-11-17T09:30:00Z'
+        questions:
+          - id: q-120
+            subject: algorithms
+            topic_id: topic-sorting
+            kind: multiple
+            text_md: Какие сортировки имеют среднюю сложность O(n log n)?
+            code: null
+            shared_material: null
+            options:
+              - {id: opt-a, text_md: Быстрая сортировка}
+              - {id: opt-b, text_md: Сортировка пузырьком}
+        answers: {q-120: [opt-a]}
+    AnswerBody:
+      type: object
+      required: [selected]
+      properties:
+        selected:
+          type: array
+          maxItems: 8
+          items: {type: string}
+    TestResult:
+      type: object
+      required: [attempt_id, correct, total, accuracy, time_seconds, xp_awarded, leveled_up, level, achievements, mistakes_added]
+      properties:
+        attempt_id: {type: string}
+        correct: {type: integer, minimum: 0, example: 8}
+        total: {type: integer, minimum: 1, example: 10}
+        accuracy: {type: number, format: float, minimum: 0, maximum: 1, example: 0.8}
+        time_seconds: {type: integer, minimum: 0, example: 372}
+        xp_awarded: {type: integer, minimum: 0, example: 45}
+        leveled_up: {type: boolean}
+        level: {type: integer, description: "Уровень после теста, example: 7"}
+        xp_to_next: {type: integer, minimum: 0, example: 115}
+        achievements:
+          type: array
+          items: {$ref: '#/components/schemas/AchievementUnlock'}
+        mistakes_added: {type: integer, minimum: 0, description: "Сколько вопросов добавилось в «ошибки», example: 2"}
+      example:
+        attempt_id: test-77
+        correct: 8
+        total: 10
+        accuracy: 0.8
+        time_seconds: 372
+        xp_awarded: 45
+        leveled_up: false
+        level: 7
+        xp_to_next: 115
+        achievements: []
+        mistakes_added: 2
+    ReviewItem:
+      type: object
+      required: [question, selected, correct, is_correct, explanation_md, section_id]
+      properties:
+        number: {type: integer, minimum: 1, description: Номер в тесте или в блоке КТ}
+        block: {allOf: [{$ref: '#/components/schemas/BlockKey'}], description: Только для КТ}
+        question: {$ref: '#/components/schemas/Question'}
+        selected:
+          type: array
+          description: Ваш ответ
+          items: {type: string}
+        correct:
+          type: array
+          description: Верные варианты
+          items: {type: string}
+        is_correct: {type: boolean}
+        points: {type: integer, minimum: 0, description: "Набрано баллов (в КТ при частичном ответе по «Базам данных» 0, 1 или 2)"}
+        explanation_md: {type: string}
+        section_id: {type: string, nullable: true, description: "Раздел урока, где разобрана тема; для кнопки «Открыть урок»"}
+        listen_text: {type: string, nullable: true, description: "Текст аудирования, чтобы переслушать в разборе"}
+      example:
+        number: 3
+        question:
+          id: q-120
+          subject: algorithms
+          topic_id: topic-sorting
+          kind: multiple
+          text_md: Какие сортировки имеют среднюю сложность O(n log n)?
+          code: null
+          shared_material: null
+          options:
+            - {id: opt-a, text_md: Быстрая сортировка}
+            - {id: opt-b, text_md: Сортировка пузырьком}
+            - {id: opt-c, text_md: Сортировка слиянием}
+        selected: [opt-a, opt-b]
+        correct: [opt-a, opt-c]
+        is_correct: false
+        points: 0
+        explanation_md: Пузырьковая сортировка в среднем работает за O(n²).
+        section_id: section-bubble
+        listen_text: null
+
+    # ── практика ──
+    PracticeSummary:
+      type: object
+      required: [mistakes_count, weak_topics_count, weak_topics]
+      properties:
+        mistakes_count: {type: integer, minimum: 0, example: 12}
+        weak_topics_count: {type: integer, minimum: 0, example: 3}
+        weak_topics:
+          type: array
+          items:
+            type: object
+            required: [topic_id, title, subject, accuracy]
+            properties:
+              topic_id: {type: string}
+              title: {type: string}
+              subject: {$ref: '#/components/schemas/SubjectId'}
+              accuracy: {type: number, format: float, minimum: 0, maximum: 1}
+      example:
+        mistakes_count: 12
+        weak_topics_count: 1
+        weak_topics:
+          - {topic_id: topic-graphs, title: Графы, subject: algorithms, accuracy: 0.28}
+    Mistakes:
+      type: object
+      required: [total, required_streak, groups]
+      properties:
+        total: {type: integer, minimum: 0}
+        required_streak: {type: integer, minimum: 1, description: "Сколько верных ответов подряд убирает вопрос из списка, example: 2"}
+        groups:
+          type: array
+          items:
+            type: object
+            required: [subject, topics]
+            properties:
+              subject: {$ref: '#/components/schemas/SubjectId'}
+              topics:
+                type: array
+                items:
+                  type: object
+                  required: [topic_id, title, questions]
+                  properties:
+                    topic_id: {type: string}
+                    title: {type: string}
+                    questions:
+                      type: array
+                      items:
+                        type: object
+                        required: [question_id, text_md, mistakes_count, correct_streak]
+                        properties:
+                          question_id: {type: string}
+                          text_md: {type: string}
+                          mistakes_count: {type: integer, minimum: 1}
+                          correct_streak: {type: integer, minimum: 0}
+      example:
+        total: 1
+        required_streak: 2
+        groups:
+          - subject: algorithms
+            topics:
+              - topic_id: topic-sorting
+                title: Сортировки
+                questions:
+                  - {question_id: q-120, text_md: "Какая сложность у быстрой сортировки в худшем случае?", mistakes_count: 2, correct_streak: 1}
+    Gaps:
+      type: object
+      required: [weak_threshold, min_answers, subjects]
+      properties:
+        weak_threshold: {type: number, format: float, description: "Точность ниже этого значения — слабая тема, example: 0.5"}
+        min_answers: {type: integer, description: "Меньше ответов — точность не считается (`null`), example: 5"}
+        subjects:
+          type: array
+          items:
+            type: object
+            required: [subject, title, topics]
+            properties:
+              subject: {$ref: '#/components/schemas/SubjectId'}
+              title: {type: string}
+              topics:
+                type: array
+                items:
+                  type: object
+                  required: [id, title, accuracy, answered]
+                  properties:
+                    id: {type: string}
+                    title: {type: string}
+                    accuracy: {type: number, format: float, minimum: 0, maximum: 1, nullable: true}
+                    answered: {type: integer, minimum: 0}
+      example:
+        weak_threshold: 0.5
+        min_answers: 5
+        subjects:
+          - subject: algorithms
+            title: Алгоритмы и структуры данных
+            topics:
+              - {id: topic-sorting, title: Сортировки, accuracy: 0.71, answered: 24}
+              - {id: topic-graphs, title: Графы, accuracy: 0.28, answered: 18}
+              - {id: topic-dp, title: Динамическое программирование, accuracy: null, answered: 2}
+
+    # ── пробный КТ ──
+    KtBlock:
+      type: object
+      required: [title, subject, tasks, points_per_task, threshold, answers, scoring]
+      properties:
+        title: {type: string}
+        subject: {$ref: '#/components/schemas/SubjectId'}
+        tasks: {type: integer}
+        points_per_task: {type: integer}
+        threshold: {type: integer, description: Минимальный балл по блоку}
+        answers: {type: string, enum: [single, single_or_multi]}
+        scoring: {type: string, enum: [exact, multi_partial]}
+    KtTrack:
+      type: object
+      required: [title, minutes, tasks, max_points, pass, blocks]
+      properties:
+        title: {type: string}
+        minutes: {type: integer}
+        tasks: {type: integer}
+        max_points: {type: integer}
+        pass: {type: integer, description: Проходной балл всего КТ}
+        blocks:
+          type: array
+          items: {$ref: '#/components/schemas/BlockKey'}
+    KtConfig:
+      type: object
+      description: Содержимое `content/exam_config.json`
+      required: [updated, group, blocks, scoring_rules, tracks, rules]
+      properties:
+        updated: {type: string, format: date}
+        group: {type: string, example: M094}
+        blocks:
+          type: object
+          additionalProperties: {$ref: '#/components/schemas/KtBlock'}
+        scoring_rules:
+          type: object
+          additionalProperties: {type: string}
+        tracks:
+          type: object
+          additionalProperties: {$ref: '#/components/schemas/KtTrack'}
+        rules:
+          type: object
+          required: [listen_max_plays, calculator]
+          properties:
+            listen_max_plays: {type: integer, example: 2}
+            calculator: {type: boolean}
+            certificate_instead_of_english:
+              type: array
+              items:
+                type: object
+                properties:
+                  points: {type: integer}
+                  ielts: {type: number}
+                  toefl_ibt: {type: integer}
+      example:
+        updated: '2026-11-15'
+        group: M094
+        blocks:
+          algorithms: {title: Алгоритмы и структуры данных, subject: algorithms, tasks: 30, points_per_task: 1, threshold: 7, answers: single, scoring: exact}
+        scoring_rules: {exact: "Балл за задание, если выбран верный ответ."}
+        tracks:
+          profile: {title: Профильная магистратура, minutes: 100, tasks: 50, max_points: 70, pass: 30, blocks: [algorithms, databases]}
+        rules:
+          listen_max_plays: 2
+          calculator: true
+          certificate_instead_of_english: [{points: 25, ielts: 6.0, toefl_ibt: 60}]
+    KtAttemptListItem:
+      type: object
+      required: [id, track, status, started_at, active]
+      properties:
+        id: {type: string}
+        track: {$ref: '#/components/schemas/Track'}
+        status: {type: string, enum: [active, finished, expired]}
+        active: {type: boolean, description: Попытка ещё идёт — показать «Продолжить»}
+        started_at: {type: string, format: date-time}
+        total: {type: integer, nullable: true, description: "Сумма баллов, null пока идёт"}
+        max_points: {type: integer}
+        passed: {type: boolean, nullable: true}
+        remaining_seconds: {type: integer, nullable: true, description: Только для идущей попытки}
+        answered_count: {type: integer}
+        tasks_count: {type: integer}
+      example:
+        id: kt-0f3a
+        track: research
+        status: active
+        active: true
+        started_at: '2026-11-17T09:00:00Z'
+        total: null
+        max_points: 150
+        passed: null
+        remaining_seconds: 4350
+        answered_count: 48
+        tasks_count: 130
+    KtTaskSummary:
+      type: object
+      required: [id, block, position, answered, flagged]
+      properties:
+        id: {type: string, example: task-12}
+        block: {$ref: '#/components/schemas/BlockKey'}
+        position: {type: integer, minimum: 1, description: "Сквозной номер в варианте, example: 12"}
+        answered: {type: boolean}
+        flagged: {type: boolean, description: Отмечено «вернуться»}
+    KtAttempt:
+      type: object
+      required: [id, track, status, started_at, deadline_at, server_time, remaining_seconds, tasks]
+      properties:
+        id: {type: string, example: kt-0f3a}
+        track: {$ref: '#/components/schemas/Track'}
+        status: {type: string, enum: [active, finished, expired]}
+        started_at: {type: string, format: date-time}
+        deadline_at: {type: string, format: date-time}
+        server_time: {type: string, format: date-time, description: Время сервера в момент ответа}
+        remaining_seconds: {type: integer, minimum: 0, example: 4350}
+        tasks:
+          type: array
+          description: Сетка заданий в порядке блоков
+          items: {$ref: '#/components/schemas/KtTaskSummary'}
+      example:
+        id: kt-0f3a
+        track: research
+        status: active
+        started_at: '2026-11-17T09:00:00Z'
+        deadline_at: '2026-11-17T12:55:00Z'
+        server_time: '2026-11-17T11:42:30Z'
+        remaining_seconds: 4350
+        tasks:
+          - {id: task-1, block: english, position: 1, answered: true, flagged: false}
+          - {id: task-2, block: english, position: 2, answered: false, flagged: true}
+    KtTask:
+      allOf:
+        - $ref: '#/components/schemas/Question'
+        - type: object
+          required: [block, position, selected, flagged, calculator_allowed, listen]
+          properties:
+            block: {$ref: '#/components/schemas/BlockKey'}
+            position: {type: integer, minimum: 1}
+            selected:
+              type: array
+              items: {type: string}
+            flagged: {type: boolean}
+            calculator_allowed: {type: boolean, description: Показывать ли кнопку «Калькулятор»}
+            listen:
+              type: object
+              nullable: true
+              description: Только у заданий на аудирование. Текст озвучивает браузер (Web Speech API).
+              required: [text, lang, plays_left, max_plays]
+              properties:
+                text: {type: string}
+                lang: {type: string, example: en-US}
+                plays_left: {type: integer, minimum: 0}
+                max_plays: {type: integer, example: 2}
+      example:
+        id: q-501
+        subject: english
+        topic_id: null
+        kind: single
+        text_md: Choose the best answer.
+        code: null
+        shared_material: null
+        options:
+          - {id: opt-a, text_md: went}
+          - {id: opt-b, text_md: gone}
+        block: english
+        position: 12
+        selected: [opt-a]
+        flagged: false
+        calculator_allowed: false
+        listen: {text: 'She went to the library yesterday.', lang: en-US, plays_left: 2, max_plays: 2}
+    KtResult:
+      type: object
+      required: [attempt_id, track, total, max_points, pass_points, passed, blocks, time_spent_seconds, xp_awarded, achievements]
+      properties:
+        attempt_id: {type: string}
+        track: {$ref: '#/components/schemas/Track'}
+        total: {type: integer, example: 98}
+        max_points: {type: integer, example: 150}
+        pass_points: {type: integer, example: 75}
+        passed: {type: boolean, description: Сумма не ниже проходного балла и каждый блок не ниже своего порога}
+        blocks:
+          type: array
+          items:
+            type: object
+            required: [block, title, score, max, threshold, passed]
+            properties:
+              block: {$ref: '#/components/schemas/BlockKey'}
+              title: {type: string}
+              score: {type: integer}
+              max: {type: integer}
+              threshold: {type: integer}
+              passed: {type: boolean}
+        previous_total: {type: integer, nullable: true, description: Сумма в предыдущей завершённой попытке этого направления}
+        time_spent_seconds: {type: integer, minimum: 0}
+        xp_awarded: {type: integer, minimum: 0}
+        achievements:
+          type: array
+          items: {$ref: '#/components/schemas/AchievementUnlock'}
+      example:
+        attempt_id: kt-0f3a
+        track: research
+        total: 98
+        max_points: 150
+        pass_points: 75
+        passed: true
+        blocks:
+          - {block: english, title: Иностранный язык, score: 28, max: 50, threshold: 25, passed: true}
+          - {block: databases, title: Базы данных, score: 19, max: 40, threshold: 7, passed: true}
+        previous_total: 84
+        time_spent_seconds: 10800
+        xp_awarded: 300
+        achievements: []
+
+    # ── награды ──
+    AchievementUnlock:
+      type: object
+      required: [id, title, level]
+      properties:
+        id: {type: string}
+        title: {type: string}
+        level: {type: integer, minimum: 1, maximum: 5, description: Новый уровень достижения (I–V)}
+    Achievement:
+      type: object
+      required: [id, hidden, level, max_level, progress]
+      properties:
+        id: {type: string}
+        hidden: {type: boolean, description: "Скрытое и ещё не полученное: `title` и `description` пустые (`null`)"}
+        title: {type: string, nullable: true}
+        description: {type: string, nullable: true}
+        level: {type: integer, minimum: 0, maximum: 5, description: 0 — не получено}
+        max_level: {type: integer, example: 5}
+        progress:
+          type: object
+          description: Прогресс до следующего уровня
+          required: [current, target]
+          properties:
+            current: {type: integer, minimum: 0}
+            target: {type: integer, minimum: 1}
+        unlocked_at: {type: string, format: date-time, nullable: true}
+      example:
+        id: streak
+        hidden: false
+        title: Серия
+        description: Занимайтесь несколько дней подряд
+        level: 2
+        max_level: 5
+        progress: {current: 5, target: 14}
+        unlocked_at: '2026-11-10T20:10:00Z'
+    Cosmetic:
+      type: object
+      required: [id, type, title, unlocked, selected, unlock_hint]
+      properties:
+        id: {type: string, example: accent-3}
+        type: {type: string, enum: [accent, pattern, frame]}
+        title: {type: string}
+        unlocked: {type: boolean}
+        selected: {type: boolean}
+        unlock_hint: {type: string, nullable: true, description: "Чем открывается, пока закрыто, example: Уровень 10"}
+      example: {id: accent-3, type: accent, title: Бирюзовый, unlocked: false, selected: false, unlock_hint: Уровень 10}
+    League:
+      type: object
+      required: [name, week_ends_at, promotion_places, demotion_places, entries, me]
+      properties:
+        name: {type: string, example: Серебряная лига}
+        week_ends_at: {type: string, format: date-time}
+        promotion_places: {type: integer, description: "Сколько верхних мест повышаются, example: 3"}
+        demotion_places: {type: integer, description: "Сколько нижних мест понижаются, example: 3"}
+        entries:
+          type: array
+          items:
+            type: object
+            required: [rank, display_name, xp, is_me]
+            properties:
+              rank: {type: integer, minimum: 1}
+              display_name: {type: string}
+              xp: {type: integer, minimum: 0}
+              is_me: {type: boolean}
+        me:
+          type: object
+          required: [rank, xp]
+          description: Своя строка, даже если вне видимых мест
+          properties:
+            rank: {type: integer, minimum: 1}
+            xp: {type: integer, minimum: 0}
+      example:
+        name: Серебряная лига
+        week_ends_at: '2026-11-23T00:00:00Z'
+        promotion_places: 3
+        demotion_places: 3
+        entries:
+          - {rank: 1, display_name: Тихий Волк, xp: 840, is_me: false}
+          - {rank: 6, display_name: Быстрый Барс, xp: 540, is_me: true}
+        me: {rank: 6, xp: 540}
+
+    # ── план и новости ──
+    PlanTask:
+      type: object
+      required: [id, kind, title, done]
+      properties:
+        id: {type: string}
+        kind: {type: string, enum: [lesson, test, review, kt]}
+        title: {type: string}
+        ref:
+          type: object
+          nullable: true
+          description: Куда вести по нажатию
+          properties:
+            type: {type: string, enum: [section, topic, practice, kt]}
+            id: {type: string, nullable: true}
+        done: {type: boolean}
+      example: {id: pt-1, kind: lesson, title: 'Урок: Быстрая сортировка', ref: {type: section, id: section-quicksort}, done: false}
+    Plan:
+      type: object
+      required: [exam_date, days_left, missed_days, days]
+      properties:
+        exam_date: {type: string, format: date, nullable: true}
+        days_left: {type: integer, nullable: true, minimum: 0, example: 47}
+        missed_days: {type: integer, minimum: 0, description: "Дни с невыполненными задачами, пока план не пересчитан, example: 2"}
+        days:
+          type: array
+          items:
+            type: object
+            required: [date, tasks]
+            properties:
+              date: {type: string, format: date}
+              tasks:
+                type: array
+                items: {$ref: '#/components/schemas/PlanTask'}
+      example:
+        exam_date: '2027-06-15'
+        days_left: 47
+        missed_days: 2
+        days:
+          - date: '2026-11-17'
+            tasks:
+              - {id: pt-1, kind: lesson, title: 'Урок: Быстрая сортировка', ref: {type: section, id: section-quicksort}, done: false}
+    NewsDate:
+      type: object
+      required: [date, end, kind, title, source]
+      properties:
+        date: {type: string, format: date}
+        end: {type: string, format: date}
+        kind: {type: string, enum: [kt, grant, enroll]}
+        title: {type: string}
+        source: {type: string, format: uri}
+        estimate: {type: boolean, description: "Дата ещё не объявлена, взята по прошлому году"}
+    NewsItem:
+      type: object
+      required: [date, tag, title, summary, source]
+      properties:
+        date: {type: string, format: date}
+        tag: {type: string, example: сроки}
+        title: {type: string}
+        summary: {type: string}
+        source: {type: string, format: uri}
+    NewsFeed:
+      type: object
+      required: [updated, next_kt, dates, items]
+      properties:
+        updated: {type: string, format: date}
+        next_kt:
+          type: object
+          nullable: true
+          description: Ближайшее тестирование для обратного отсчёта
+          required: [date, end, title, days_left, estimate]
+          properties:
+            date: {type: string, format: date}
+            end: {type: string, format: date}
+            title: {type: string}
+            days_left: {type: integer, description: "Дней до начала (0 — идёт сейчас), example: 2"}
+            estimate: {type: boolean}
+        dates:
+          type: array
+          items: {$ref: '#/components/schemas/NewsDate'}
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/NewsItem'}
+      example:
+        updated: '2026-11-15'
+        next_kt: {date: '2026-11-19', end: '2026-12-11', title: Зимнее комплексное тестирование, days_left: 2, estimate: false}
+        dates:
+          - {date: '2026-11-19', end: '2026-12-11', kind: kt, title: Зимнее комплексное тестирование, source: 'https://testcenter.kz/?page_id=16374&lang=ru'}
+        items:
+          - {date: '2026-11-15', tag: сроки, title: 'Зимний КТ: приём заявлений закрыт', summary: Тестирование идёт с 19 ноября по 11 декабря., source: 'https://testcenter.kz/?page_id=16374&lang=ru'}
+
+    # ── ИИ ──
+    AiContext:
+      type: object
+      description: Что обсуждаем. Сервер подставляет текст раздела или вопроса в промпт.
+      required: [type, id]
+      properties:
+        type: {type: string, enum: [section, question]}
+        id: {type: string, description: Идентификатор раздела или вопроса}
+        attempt_id: {type: string, description: "Для `question` — тест или попытка КТ, где был вопрос"}
+    AiLimits:
+      type: object
+      required: [limit, remaining, resets_at]
+      properties:
+        limit: {type: integer, example: 20}
+        remaining: {type: integer, minimum: 0, example: 19}
+        resets_at: {type: string, format: date-time}
+      example: {limit: 20, remaining: 19, resets_at: '2026-11-18T00:00:00Z'}
+    Chat:
+      type: object
+      required: [id, title, created_at, updated_at]
+      properties:
+        id: {type: string, example: chat-1}
+        title: {type: string, example: Быстрая сортировка}
+        context: {type: object, nullable: true, allOf: [{$ref: '#/components/schemas/AiContext'}]}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+      example:
+        id: chat-1
+        title: Быстрая сортировка
+        context: {type: section, id: section-quicksort}
+        created_at: '2026-11-17T09:30:00Z'
+        updated_at: '2026-11-17T09:31:00Z'
+    ChatMessage:
+      type: object
+      required: [id, role, text_md, created_at]
+      properties:
+        id: {type: string}
+        role: {type: string, enum: [user, assistant]}
+        text_md: {type: string}
+        interrupted: {type: boolean, description: "Ответ оборван или остановлен, текст неполный"}
+        lesson_links:
+          type: array
+          description: Ссылки на уроки в ответе
+          items:
+            type: object
+            required: [section_id, title]
+            properties:
+              section_id: {type: string}
+              title: {type: string}
+        created_at: {type: string, format: date-time}
+    ChatDetail:
+      allOf:
+        - $ref: '#/components/schemas/Chat'
+        - type: object
+          required: [messages]
+          properties:
+            messages:
+              type: array
+              items: {$ref: '#/components/schemas/ChatMessage'}
+      example:
+        id: chat-1
+        title: Быстрая сортировка
+        context: {type: section, id: section-quicksort}
+        created_at: '2026-11-17T09:30:00Z'
+        updated_at: '2026-11-17T09:31:00Z'
+        messages:
+          - {id: msg-1, role: user, text_md: 'Почему в худшем случае O(n²)?', created_at: '2026-11-17T09:30:00Z'}
+          - id: msg-2
+            role: assistant
+            text_md: Если опорный элемент всегда крайний, разделение даёт перекос.
+            lesson_links: [{section_id: section-quicksort, title: Быстрая сортировка}]
+            created_at: '2026-11-17T09:30:05Z'
+    ChatMessageCreate:
+      type: object
+      required: [text]
+      properties:
+        text: {type: string, minLength: 1, maxLength: 4000}
+        context: {$ref: '#/components/schemas/AiContext'}
