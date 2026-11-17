@@ -1,0 +1,7 @@
+# Правила проверки контракта (CI и `make lint-api`). Основа — recommended.
+extends: [recommended]
+rules:
+  info-license: off              # лицензии у учебного проекта нет
+  no-server-example.com: off
+  operation-4xx-response: off    # у /healthz и других простых методов 4xx нет
+  security-defined: off          # `security: []` задано там, где сессия не нужна
