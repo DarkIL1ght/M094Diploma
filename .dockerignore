@@ -1,0 +1,11 @@
+.git
+.github
+.env
+bin
+tmp
+node_modules
+design
+docs
+deploy
+api
+*.md
