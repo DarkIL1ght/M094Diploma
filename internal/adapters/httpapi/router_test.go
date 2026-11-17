@@ -25,7 +25,7 @@ func do(h http.Handler, method, path string, hdr map[string]string) *httptest.Re
 }
 
 func TestHealthz(t *testing.T) {
-	h := NewRouter(testLogger(&bytes.Buffer{}))
+	h := NewRouter(testLogger(&bytes.Buffer{}), Deps{})
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		rec := do(h, method, "/healthz", nil)
 		if rec.Code != http.StatusOK {
@@ -42,7 +42,7 @@ func TestHealthz(t *testing.T) {
 }
 
 func TestErrorsFollowContract(t *testing.T) {
-	h := NewRouter(testLogger(&bytes.Buffer{}))
+	h := NewRouter(testLogger(&bytes.Buffer{}), Deps{})
 	cases := []struct {
 		method, path string
 		status       int
@@ -80,7 +80,7 @@ func TestMethodsDispatch(t *testing.T) {
 
 func TestRouterSetsRequestIDAndLogs(t *testing.T) {
 	var buf bytes.Buffer
-	h := NewRouter(testLogger(&buf))
+	h := NewRouter(testLogger(&buf), Deps{})
 	rec := do(h, http.MethodGet, "/api/x", map[string]string{"X-Request-ID": "abc-123"})
 	if rec.Header().Get("X-Request-ID") != "abc-123" {
 		t.Fatalf("заголовок: %q", rec.Header().Get("X-Request-ID"))
@@ -96,7 +96,7 @@ func TestRouterSetsRequestIDAndLogs(t *testing.T) {
 
 func TestHealthzIsQuietInLog(t *testing.T) {
 	var buf bytes.Buffer
-	h := NewRouter(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	h := NewRouter(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})), Deps{})
 	do(h, http.MethodGet, "/healthz", nil)
 	if buf.Len() != 0 {
 		t.Fatalf("проверка живости засоряет лог на уровне info: %q", buf.String())

@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/DarkIL1ght/M094Diploma/internal/adapters/httpapi"
+	"github.com/DarkIL1ght/M094Diploma/internal/adapters/memstore"
+	"github.com/DarkIL1ght/M094Diploma/internal/app/session"
 	"github.com/DarkIL1ght/M094Diploma/internal/config"
 	"github.com/DarkIL1ght/M094Diploma/internal/logging"
 )
@@ -54,7 +56,11 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 	}
 	log.Info("сервер запущен", "listen", ln.Addr().String(), "config", cfg)
 
-	srv := httpapi.NewServer(httpapi.NewRouter(log))
+	// Хранилище в Postgres появится в B-04; до этого сессии живут в памяти и пропадают при перезапуске.
+	log.Warn("сессии хранятся в памяти процесса: после перезапуска сервера они пропадут")
+	sessions := session.New(memstore.New())
+
+	srv := httpapi.NewServer(httpapi.NewRouter(log, httpapi.Deps{Sessions: sessions, TrustProxy: cfg.TrustProxy}))
 	if err := httpapi.Serve(ctx, srv, ln, cfg.ShutdownTimeout, log); err != nil {
 		log.Error("сервер остановился с ошибкой", "error", err)
 		return 1

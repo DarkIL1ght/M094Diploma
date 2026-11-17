@@ -87,7 +87,8 @@ paths:
       summary: Профиль и текущая сессия
       description: |
         Создаёт сессию, если cookie нет (`created: true`, ставит `sid`). Фронтенд вызывает при старте.
-        `onboarded: false` — показать «Первый вход» (X1).
+        `onboarded: false` — показать «Первый вход» (X1). С одного адреса можно создать не больше 20 новых сессий в час
+        (`429 rate_limited`).
       operationId: getMe
       security: []
       responses:

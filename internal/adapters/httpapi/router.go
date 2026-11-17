@@ -7,13 +7,23 @@ import (
 	"net/http"
 
 	"github.com/DarkIL1ght/M094Diploma/internal/adapters/httpapi/middleware"
+	"github.com/DarkIL1ght/M094Diploma/internal/app/session"
 )
+
+// Deps — зависимости HTTP-слоя. Пустое поле отключает соответствующие маршруты.
+type Deps struct {
+	Sessions   *session.Service // анонимные сессии (B-03)
+	TrustProxy bool             // доверять X-Forwarded-* от обратного прокси
+}
 
 // NewRouter собирает обработчик сервера. Порядок обёрток снаружи внутрь: идентификатор запроса,
 // журнал, перехват паник. Паника становится 500 внутри журнала, поэтому в нём виден настоящий код.
-func NewRouter(log *slog.Logger) http.Handler {
+func NewRouter(log *slog.Logger, d Deps) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", Methods{http.MethodGet: http.HandlerFunc(healthz)})
+	if d.Sessions != nil {
+		NewSessions(d.Sessions, log, d.TrustProxy).Routes(mux)
+	}
 	mux.HandleFunc("/", notFound) // всё, что не нашлось: JSON по контракту вместо текста
 
 	return wrap(mux, log)
