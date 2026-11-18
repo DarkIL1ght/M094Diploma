@@ -1,0 +1,166 @@
+{
+  "font": {
+    "family": {
+      "base": {
+        "$type": "string",
+        "$value": "Inter",
+        "$extensions": {
+          "com.figma.variableId": "VariableID:3:38",
+          "com.figma.scopes": [
+            "FONT_FAMILY"
+          ],
+          "com.figma.type": "string"
+        }
+      }
+    },
+    "weight": {
+      "regular": {
+        "$type": "number",
+        "$value": 400,
+        "$extensions": {
+          "com.figma.variableId": "VariableID:3:39",
+          "com.figma.scopes": [
+            "FONT_STYLE"
+          ]
+        }
+      },
+      "medium": {
+        "$type": "number",
+        "$value": 500,
+        "$extensions": {
+          "com.figma.variableId": "VariableID:3:40",
+          "com.figma.scopes": [
+            "FONT_STYLE"
+          ]
+        }
+      },
+      "semibold": {
+        "$type": "number",
+        "$value": 600,
+        "$extensions": {
+          "com.figma.variableId": "VariableID:3:41",
+          "com.figma.scopes": [
+            "FONT_STYLE"
+          ]
+        }
+      }
+    },
+    "size": {
+      "xs": {
+        "$type": "number",
+        "$value": 11,
+        "$extensions": {
+          "com.figma.variableId": "VariableID:3:42",
+          "com.figma.scopes": [
+            "FONT_SIZE"
+          ]
+        }
+      },
+      "sm": {
+        "$type": "number",
+        "$value": 12,
+        "$extensions": {
+          "com.figma.variableId": "VariableID:3:43",
+          "com.figma.scopes": [
+            "FONT_SIZE"
+          ]
+        }
+      },
+      "md": {
+        "$type": "number",
+        "$value": 13,
+        "$extensions": {
+          "com.figma.variableId": "VariableID:3:44",
+          "com.figma.scopes": [
+            "FONT_SIZE"
+          ]
+        }
+      },
+      "base": {
+        "$type": "number",
+        "$value": 14,
+        "$extensions": {
+          "com.figma.variableId": "VariableID:3:45",
+          "com.figma.scopes": [
+            "FONT_SIZE"
+          ]
+        }
+      },
+      "lg": {
+        "$type": "number",
+        "$value": 16,
+        "$extensions": {
+          "com.figma.variableId": "VariableID:3:46",
+          "com.figma.scopes": [
+            "FONT_SIZE"
+          ]
+        }
+      },
+      "xl": {
+        "$type": "number",
+        "$value": 18,
+        "$extensions": {
+          "com.figma.variableId": "VariableID:3:47",
+          "com.figma.scopes": [
+            "FONT_SIZE"
+          ]
+        }
+      },
+      "2xl": {
+        "$type": "number",
+        "$value": 20,
+        "$extensions": {
+          "com.figma.variableId": "VariableID:3:48",
+          "com.figma.scopes": [
+            "FONT_SIZE"
+          ]
+        }
+      },
+      "3xl": {
+        "$type": "number",
+        "$value": 24,
+        "$extensions": {
+          "com.figma.variableId": "VariableID:3:49",
+          "com.figma.scopes": [
+            "FONT_SIZE"
+          ]
+        }
+      },
+      "4xl": {
+        "$type": "number",
+        "$value": 28,
+        "$extensions": {
+          "com.figma.variableId": "VariableID:3:50",
+          "com.figma.scopes": [
+            "FONT_SIZE"
+          ]
+        }
+      }
+    },
+    "line-height": {
+      "tight": {
+        "$type": "number",
+        "$value": 1.25,
+        "$extensions": {
+          "com.figma.variableId": "VariableID:3:51",
+          "com.figma.scopes": [
+            "LINE_HEIGHT"
+          ]
+        }
+      },
+      "normal": {
+        "$type": "number",
+        "$value": 1.5,
+        "$extensions": {
+          "com.figma.variableId": "VariableID:3:52",
+          "com.figma.scopes": [
+            "LINE_HEIGHT"
+          ]
+        }
+      }
+    }
+  },
+  "$extensions": {
+    "com.figma.modeName": "Mode 1"
+  }
+}
