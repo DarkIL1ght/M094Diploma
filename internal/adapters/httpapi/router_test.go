@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/DarkIL1ght/M094Diploma/internal/adapters/httpapi/respond"
 )
 
 func testLogger(buf *bytes.Buffer) *slog.Logger {
@@ -54,7 +56,7 @@ func TestErrorsFollowContract(t *testing.T) {
 	}
 	for _, c := range cases {
 		rec := do(h, c.method, c.path, nil)
-		var e errorBody
+		var e respond.Error
 		if rec.Code != c.status || json.Unmarshal(rec.Body.Bytes(), &e) != nil || e.Code != c.code || e.Message == "" {
 			t.Errorf("%s %s: код %d, тело %q", c.method, c.path, rec.Code, rec.Body.String())
 		}
@@ -110,7 +112,7 @@ func TestPanicBecomes500AndIsLogged(t *testing.T) {
 	mux.HandleFunc("/boom", func(http.ResponseWriter, *http.Request) { panic("сломалось") })
 	h := wrap(mux, log)
 	rec := do(h, http.MethodGet, "/boom", nil)
-	var e errorBody
+	var e respond.Error
 	if rec.Code != http.StatusInternalServerError || json.Unmarshal(rec.Body.Bytes(), &e) != nil || e.Code != "internal" {
 		t.Fatalf("код %d, тело %q", rec.Code, rec.Body.String())
 	}

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DarkIL1ght/M094Diploma/internal/adapters/httpapi/respond"
 	"github.com/DarkIL1ght/M094Diploma/internal/adapters/memstore"
 	"github.com/DarkIL1ght/M094Diploma/internal/app/session"
 )
@@ -142,7 +143,7 @@ func TestRequireSession(t *testing.T) {
 		"чужой токен":    {"Cookie": "sid=" + strings.Repeat("A", 43)},
 	} {
 		resp, body := call(t, &http.Client{}, http.MethodPost, srv.URL+"/api/session/recovery-key", "", hdr)
-		var e errorBody
+		var e respond.Error
 		decode(t, body, &e)
 		if resp.StatusCode != 401 || e.Code != "no_session" {
 			t.Errorf("%s: код %d, тело %s", name, resp.StatusCode, body)
@@ -205,14 +206,14 @@ func TestRestoreWrongKeyAndBruteForceLimit(t *testing.T) {
 	c := browser(t)
 	for i := 0; i < 5; i++ {
 		resp, body := call(t, c, http.MethodPost, srv.URL+"/api/session/restore", `{"key":"ZZZZ-ZZZZ-ZZZZ-ZZZ`+strconv.Itoa(i)+`"}`, nil)
-		var e errorBody
+		var e respond.Error
 		decode(t, body, &e)
 		if resp.StatusCode != 404 || e.Code != "invalid_key" || sidCookie(resp) != nil {
 			t.Fatalf("попытка %d: код %d, %s, cookie %v", i, resp.StatusCode, body, sidCookie(resp))
 		}
 	}
 	resp, body := call(t, c, http.MethodPost, srv.URL+"/api/session/restore", `{"key":"ZZZZ-ZZZZ-ZZZZ-ZZZ9"}`, nil)
-	var e errorBody
+	var e respond.Error
 	decode(t, body, &e)
 	retry, _ := strconv.Atoi(resp.Header.Get("Retry-After"))
 	if resp.StatusCode != 429 || e.Code != "rate_limited" || retry < 1 || retry > 900 {
@@ -259,14 +260,14 @@ func TestRestoreBadBodies(t *testing.T) {
 	c := &http.Client{}
 	for name, body := range map[string]string{"не JSON": "ключ", "пустое тело": ""} {
 		resp, b := call(t, c, http.MethodPost, srv.URL+"/api/session/restore", body, nil)
-		var e errorBody
+		var e respond.Error
 		decode(t, b, &e)
 		if resp.StatusCode != 400 || e.Code != "bad_request" {
 			t.Errorf("%s: код %d, %s", name, resp.StatusCode, b)
 		}
 	}
 	resp, b := call(t, c, http.MethodPost, srv.URL+"/api/session/restore", `{"key":"`+strings.Repeat("A", 5000)+`"}`, nil)
-	var e errorBody
+	var e respond.Error
 	decode(t, b, &e)
 	if resp.StatusCode != 413 || e.Code != "payload_too_large" {
 		t.Errorf("большое тело: код %d, %s", resp.StatusCode, b)

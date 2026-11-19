@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DarkIL1ght/M094Diploma/internal/adapters/httpapi/respond"
 	"github.com/DarkIL1ght/M094Diploma/internal/app/session"
 )
 
@@ -68,7 +69,7 @@ func (a *Sessions) Require(next http.Handler) http.Handler {
 		case err == nil:
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, sess)))
 		case errors.Is(err, session.ErrNotFound):
-			writeError(w, http.StatusUnauthorized, "no_session", "Сессия не найдена")
+			respond.Err(w, http.StatusUnauthorized, "no_session", "Сессия не найдена")
 		default:
 			a.internal(w, r, err)
 		}
@@ -135,17 +136,17 @@ func (a *Sessions) restore(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
-			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "Тело запроса слишком большое")
+			respond.Err(w, http.StatusRequestEntityTooLarge, "payload_too_large", "Тело запроса слишком большое")
 			return
 		}
-		writeError(w, http.StatusBadRequest, "bad_request", "Ожидается JSON с полем key")
+		respond.Err(w, http.StatusBadRequest, "bad_request", "Ожидается JSON с полем key")
 		return
 	}
 	sess, token, err := a.svc.Restore(r.Context(), body.Key)
 	if errors.Is(err, session.ErrInvalidKey) {
 		a.restoreFails.Hit(ip)
 		a.log.InfoContext(r.Context(), "ключ восстановления не подошёл")
-		writeError(w, http.StatusNotFound, "invalid_key", "Ключ не подошёл")
+		respond.Err(w, http.StatusNotFound, "invalid_key", "Ключ не подошёл")
 		return
 	}
 	if err != nil {
@@ -158,7 +159,7 @@ func (a *Sessions) restore(w http.ResponseWriter, r *http.Request) {
 
 func (a *Sessions) internal(w http.ResponseWriter, r *http.Request, err error) {
 	a.log.ErrorContext(r.Context(), "ошибка сессии", "error", err)
-	writeError(w, http.StatusInternalServerError, "internal", "Внутренняя ошибка сервера")
+	respond.Err(w, http.StatusInternalServerError, "internal", "Внутренняя ошибка сервера")
 }
 
 func (a *Sessions) setCookie(w http.ResponseWriter, r *http.Request, token string) {
@@ -196,7 +197,7 @@ func (a *Sessions) clientIP(r *http.Request) string {
 // writeSecret отдаёт JSON с токенами и ключами: такие ответы нельзя кэшировать.
 func writeSecret(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, status, v)
+	respond.JSON(w, status, v)
 }
 
 func tooManyRequests(w http.ResponseWriter, retry time.Duration) {
@@ -205,7 +206,7 @@ func tooManyRequests(w http.ResponseWriter, retry time.Duration) {
 		secs = 1
 	}
 	w.Header().Set("Retry-After", strconv.Itoa(secs))
-	writeError(w, http.StatusTooManyRequests, "rate_limited", "Слишком много запросов, попробуйте позже")
+	respond.Err(w, http.StatusTooManyRequests, "rate_limited", "Слишком много запросов, попробуйте позже")
 }
 
 // meResponse — профиль по контракту (схема Me). Уровень, XP и серия появятся с геймификацией (B-09),
