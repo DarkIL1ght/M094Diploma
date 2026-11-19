@@ -1,0 +1,75 @@
+/* Значения из экспортов Figma в design/tokens/. */
+:root {
+  --color-surface-default: #FFFFFF;
+  --color-surface-subtle: #F4F4F5;
+  --color-surface-muted: #E4E4E7;
+  --color-surface-strong: #D4D4D8;
+  --color-border-default: #D4D4D8;
+  --color-border-strong: #52525B;
+  --color-border-focus: #27272A;
+  --color-text-primary: #27272A;
+  --color-text-secondary: #52525B;
+  --color-text-muted: #71717A;
+  --color-text-disabled: #A1A1AA;
+  --color-text-inverse: #FFFFFF;
+  --color-action-primary: #27272A;
+  --color-status-error: #B91C1C;
+  --color-status-success: #15803D;
+  --color-status-warning: #B45309;
+  --color-status-info: #1D4ED8;
+  --color-accent-red: #DC2626;
+  --color-accent-red-subtle: #FEE2E2;
+  --color-accent-orange: #EA580C;
+  --color-accent-orange-subtle: #FFEDD5;
+  --color-accent-amber: #D97706;
+  --color-accent-amber-subtle: #FEF3C7;
+  --color-accent-green: #16A34A;
+  --color-accent-green-subtle: #DCFCE7;
+  --color-accent-teal: #0D9488;
+  --color-accent-teal-subtle: #CCFBF1;
+  --color-accent-blue: #2563EB;
+  --color-accent-blue-subtle: #DBEAFE;
+  --color-accent-violet: #7C3AED;
+  --color-accent-violet-subtle: #EDE9FE;
+  --color-accent-pink: #DB2777;
+  --color-accent-pink-subtle: #FCE7F3;
+
+  --space-0: 0px;
+  --space-2: 2px;
+  --space-4: 4px;
+  --space-8: 8px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-20: 20px;
+  --space-24: 24px;
+  --space-32: 32px;
+  --space-48: 48px;
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 999px;
+
+  --font-family-base: Inter;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-md: 13px;
+  --font-size-base: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 18px;
+  --font-size-2xl: 20px;
+  --font-size-3xl: 24px;
+  --font-size-4xl: 28px;
+  --font-line-height-tight: 1.25;
+  --font-line-height-normal: 1.5;
+
+  --bp-mobile: 360px;
+  --bp-tablet: 768px;
+  --bp-desktop: 1280px;
+  --bp-wide: 1440px;
+}

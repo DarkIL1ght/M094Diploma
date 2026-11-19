@@ -39,6 +39,39 @@ function linkList(items, className) {
   return list;
 }
 
+function appearanceSettings() {
+  const settings = document.createElement('fieldset');
+  settings.className = 'appearance-settings';
+  settings.innerHTML = `
+    <legend>Оформление</legend>
+    <label>Тема
+      <select name="theme" data-appearance>
+        <option value="system">Как в системе</option>
+        <option value="light">Светлая</option>
+        <option value="dark">Тёмная</option>
+      </select>
+    </label>
+    <label>Акцент
+      <select name="accent" data-appearance>
+        <option value="none">Без акцента</option>
+        <option value="red">Красный</option>
+        <option value="orange">Оранжевый</option>
+        <option value="amber">Янтарный</option>
+        <option value="green">Зелёный</option>
+        <option value="teal">Бирюзовый</option>
+        <option value="blue">Синий</option>
+        <option value="violet">Фиолетовый</option>
+        <option value="pink">Розовый</option>
+      </select>
+    </label>`;
+
+  for (const control of settings.querySelectorAll('select')) {
+    const value = document.documentElement.dataset[control.name];
+    if (value) control.value = value;
+  }
+  return settings;
+}
+
 export function createView(route, params) {
   const page = document.createElement('div');
   page.className = 'page';
@@ -60,6 +93,8 @@ export function createView(route, params) {
   } else if (route.path === '/') {
     heading.textContent = 'Подготовка к комплексному тестированию';
     description.textContent = 'Для поступающих в магистратуру.';
+  } else if (route.path === '/settings') {
+    description.replaceWith(appearanceSettings());
   } else if (route.path === '/learn' || route.path === '/practice' || route.path === '/me') {
     description.remove();
   }
