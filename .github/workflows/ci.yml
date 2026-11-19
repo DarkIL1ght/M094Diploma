@@ -78,6 +78,11 @@ jobs:
       - name: eslint
         if: steps.has.outputs.js == 'yes'
         run: npx --yes eslint@9.39.1 web
+      # Имя задания не меняем: «JS (eslint)» — обязательная проверка main. Папку Node 22+ принимает за файл,
+      # поэтому тесты ищем по шаблону.
+      - name: node --test
+        if: steps.has.outputs.js == 'yes'
+        run: node --test 'web/**/*.test.mjs'
 
   docker:
     name: Docker (сборка и /healthz)
