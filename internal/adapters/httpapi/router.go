@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/DarkIL1ght/M094Diploma/internal/adapters/httpapi/middleware"
+	"github.com/DarkIL1ght/M094Diploma/internal/adapters/httpapi/respond"
 )
 
 // NewRouter собирает обработчик сервера. Порядок обёрток снаружи внутрь: идентификатор запроса,
@@ -30,9 +31,9 @@ func wrap(h http.Handler, log *slog.Logger) http.Handler {
 // Готовность базы появится вместе со слоем хранилища; здесь она не проверяется намеренно:
 // упавшая база не должна приводить к перезапуску самого сервера.
 func healthz(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	respond.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func notFound(w http.ResponseWriter, _ *http.Request) {
-	writeError(w, http.StatusNotFound, "not_found", "Не найдено")
+	respond.Err(w, http.StatusNotFound, "not_found", "Не найдено")
 }
