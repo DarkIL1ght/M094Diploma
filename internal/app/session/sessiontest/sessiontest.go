@@ -5,6 +5,8 @@ package sessiontest
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,6 +96,101 @@ func Run(t *testing.T, newStore func(t *testing.T) session.Store) {
 		s2, _ := st.SessionByToken(ctx, session.HashToken("b"))
 		if s2.RecoveryIssuedAt != nil {
 			t.Fatal("у другой сессии ключа нет")
+		}
+	})
+
+	t.Run("очистка просроченных", func(t *testing.T) {
+		st := newStore(t)
+		old, fresh := session.HashToken("old"), session.HashToken("fresh")
+		// s1: единственный токен просрочен; s2: просрочен один из двух; s3: свежий токен
+		_ = st.CreateSession(ctx, mk("s1"), old)
+		k1, _ := session.HashKey("0000-0000-0000-0001")
+		_ = st.SetRecoveryKey(ctx, "s1", k1, t0)
+		_ = st.CreateSession(ctx, mk("s2"), session.HashToken("s2-old"))
+		_ = st.AddToken(ctx, "s2", session.HashToken("s2-new"), t0.Add(48*time.Hour))
+		_ = st.CreateSession(ctx, mk("s3"), fresh)
+		_ = st.TouchToken(ctx, fresh, t0.Add(48*time.Hour))
+
+		n, err := st.DeleteExpired(ctx, t0.Add(24*time.Hour))
+		if err != nil || n != 1 {
+			t.Fatalf("должна удалиться одна сессия (s1), получили %d, %v", n, err)
+		}
+		if _, err := st.SessionByToken(ctx, old); !errors.Is(err, session.ErrNotFound) {
+			t.Fatalf("просроченный токен должен исчезнуть: %v", err)
+		}
+		if _, err := st.SessionByRecoveryKey(ctx, k1); !errors.Is(err, session.ErrNotFound) {
+			t.Fatalf("ключ удалённой сессии должен исчезнуть: %v", err)
+		}
+		if got, err := st.SessionByToken(ctx, session.HashToken("s2-new")); err != nil || got.ID != "s2" {
+			t.Fatalf("сессия с одним живым токеном остаётся: %+v, %v", got, err)
+		}
+		if _, err := st.SessionByToken(ctx, session.HashToken("s2-old")); !errors.Is(err, session.ErrNotFound) {
+			t.Fatalf("просроченный токен живой сессии тоже удаляется: %v", err)
+		}
+		if _, err := st.SessionByToken(ctx, fresh); err != nil {
+			t.Fatalf("свежая сессия: %v", err)
+		}
+		if n, err := st.DeleteExpired(ctx, t0.Add(24*time.Hour)); err != nil || n != 0 {
+			t.Fatalf("повторная очистка ничего не удаляет: %d, %v", n, err)
+		}
+	})
+
+	t.Run("параллельный доступ", func(t *testing.T) {
+		st := newStore(t)
+		const workers = 50
+		first := session.HashToken("first")
+		if err := st.CreateSession(ctx, mk("shared"), first); err != nil {
+			t.Fatal(err)
+		}
+		tokens := make([]session.TokenHash, workers)
+		keys := make([]session.KeyHash, workers)
+		var wg sync.WaitGroup
+		for i := 0; i < workers; i++ {
+			tokens[i] = session.HashToken(fmt.Sprintf("tok-%d", i))
+			keys[i], _ = session.HashKey(fmt.Sprintf("%016d", i))
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				now := t0.Add(time.Duration(i) * time.Second)
+				// собственные сессии создаются параллельно с работой над общей
+				if err := st.CreateSession(ctx, mk(fmt.Sprintf("own-%d", i)), session.HashToken(fmt.Sprintf("own-tok-%d", i))); err != nil {
+					t.Error(err)
+				}
+				if err := st.AddToken(ctx, "shared", tokens[i], now); err != nil {
+					t.Error(err)
+				}
+				if err := st.TouchToken(ctx, tokens[i], now.Add(time.Minute)); err != nil {
+					t.Error(err)
+				}
+				if err := st.SetRecoveryKey(ctx, "shared", keys[i], now); err != nil {
+					t.Error(err)
+				}
+				if _, err := st.SessionByToken(ctx, first); err != nil {
+					t.Error(err)
+				}
+				_, _ = st.SessionByRecoveryKey(ctx, keys[i])
+			}()
+		}
+		wg.Wait()
+
+		for i, tok := range tokens {
+			if got, err := st.SessionByToken(ctx, tok); err != nil || got.ID != "shared" {
+				t.Fatalf("токен %d не находит общую сессию: %+v, %v", i, got, err)
+			}
+		}
+		valid := 0
+		for _, k := range keys {
+			if got, err := st.SessionByRecoveryKey(ctx, k); err == nil && got.ID == "shared" {
+				valid++
+			}
+		}
+		if valid != 1 {
+			t.Fatalf("после гонки должен действовать ровно один ключ, действует %d", valid)
+		}
+		for i := 0; i < workers; i++ {
+			if _, err := st.SessionByToken(ctx, session.HashToken(fmt.Sprintf("own-tok-%d", i))); err != nil {
+				t.Fatalf("собственная сессия %d потерялась: %v", i, err)
+			}
 		}
 	})
 }

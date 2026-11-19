@@ -195,3 +195,59 @@ func TestDisplayNamesVary(t *testing.T) {
 		t.Fatalf("ники почти не меняются: %d разных из 40", len(names))
 	}
 }
+
+func TestCleanupRemovesAbandonedSessionsOnly(t *testing.T) {
+	svc, st, c := newService(t)
+	ctx := context.Background()
+	_, abandoned, _ := svc.Start(ctx)
+	active, activeTok, _ := svc.Start(ctx)
+
+	c.t = c.t.Add(session.DefaultTTL - time.Hour)
+	if _, err := svc.Resolve(ctx, activeTok); err != nil { // визит продлевает срок
+		t.Fatal(err)
+	}
+	if n, err := svc.Cleanup(ctx); err != nil || n != 0 {
+		t.Fatalf("пока срок не вышел, удалять нечего: %d, %v", n, err)
+	}
+	c.t = c.t.Add(2 * time.Hour) // брошенный токен вышел за срок, активный нет
+	n, err := svc.Cleanup(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("должна удалиться одна брошенная сессия: %d, %v", n, err)
+	}
+	if _, err := svc.Resolve(ctx, abandoned); !errors.Is(err, session.ErrNotFound) {
+		t.Fatalf("брошенная сессия: %v", err)
+	}
+	if got, err := svc.Resolve(ctx, activeTok); err != nil || got.ID != active.ID {
+		t.Fatalf("активная сессия должна остаться: %+v, %v", got, err)
+	}
+	if len(st.TokenHashes()) != 1 {
+		t.Fatalf("в хранилище должен остаться один токен, осталось %d", len(st.TokenHashes()))
+	}
+}
+
+func TestRunCleanupTicksAndStopsOnContext(t *testing.T) {
+	svc, _, _ := newService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	reports := make(chan error, 8)
+	done := make(chan struct{})
+	go func() {
+		svc.RunCleanup(ctx, 5*time.Millisecond, func(_ int, err error) { reports <- err })
+		close(done)
+	}()
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-reports:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("очистка не запускается по таймеру")
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunCleanup не остановился по отмене контекста")
+	}
+}

@@ -3,6 +3,7 @@ package session
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"io"
 	"strings"
@@ -101,13 +102,16 @@ func randomHex(r io.Reader, n int) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// displayName — случайный ник вида «Быстрый Барс» для лиги недели.
+// displayName — случайный ник вида «Быстрый Барс» для лиги недели. Берём 32 бита на слово:
+// остаток от деления на 12 при таком числе даёт перекос порядка 1e-9.
 func displayName(r io.Reader) (string, error) {
-	var b [2]byte
+	var b [8]byte
 	if _, err := io.ReadFull(r, b[:]); err != nil {
 		return "", err
 	}
-	return nameAdjectives[int(b[0])%len(nameAdjectives)] + " " + nameAnimals[int(b[1])%len(nameAnimals)], nil
+	adj := binary.BigEndian.Uint32(b[:4]) % uint32(len(nameAdjectives))
+	animal := binary.BigEndian.Uint32(b[4:]) % uint32(len(nameAnimals))
+	return nameAdjectives[adj] + " " + nameAnimals[animal], nil
 }
 
 // Прилагательные и существительные мужского рода: согласуются в любой паре.

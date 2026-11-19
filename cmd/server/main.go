@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/DarkIL1ght/M094Diploma/internal/adapters/httpapi"
 	"github.com/DarkIL1ght/M094Diploma/internal/adapters/memstore"
@@ -57,6 +58,14 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 	// Хранилище в Postgres появится в B-04; до этого сессии живут в памяти и пропадают при перезапуске.
 	log.Warn("сессии хранятся в памяти процесса: после перезапуска сервера они пропадут")
 	sessions := session.New(memstore.New())
+	// Хранилище в памяти растёт само (каждый вход без cookie создаёт сессию): раз в час чистим брошенное.
+	go sessions.RunCleanup(ctx, time.Hour, func(deleted int, err error) {
+		if err != nil {
+			log.Error("очистка сессий не удалась", "error", err)
+		} else if deleted > 0 {
+			log.Info("удалены брошенные сессии", "count", deleted)
+		}
+	})
 
 	srv := httpapi.NewServer(httpapi.NewRouter(log, httpapi.Deps{Sessions: sessions, TrustProxy: cfg.TrustProxy}))
 	if err := httpapi.Serve(ctx, srv, ln, cfg.ShutdownTimeout, log); err != nil {

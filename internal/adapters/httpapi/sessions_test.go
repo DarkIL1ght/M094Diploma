@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,6 +10,8 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +25,22 @@ func newSessionServer(t *testing.T, trustProxy bool) (*httptest.Server, *bytes.B
 	var logs bytes.Buffer
 	svc := session.New(memstore.New())
 	srv := httptest.NewServer(NewRouter(testLogger(&logs), Deps{Sessions: svc, TrustProxy: trustProxy}))
+	t.Cleanup(srv.Close)
+	return srv, &logs
+}
+
+// newServerWith собирает сервер вручную: можно подменить хранилище и лимиты до запуска.
+func newServerWith(t *testing.T, trustProxy bool, store session.Store, tune func(*Sessions)) (*httptest.Server, *bytes.Buffer) {
+	t.Helper()
+	var logs bytes.Buffer
+	log := testLogger(&logs)
+	a := NewSessions(session.New(store), log, trustProxy)
+	if tune != nil {
+		tune(a)
+	}
+	mux := http.NewServeMux()
+	a.Routes(mux)
+	srv := httptest.NewServer(wrap(mux, log))
 	t.Cleanup(srv.Close)
 	return srv, &logs
 }
@@ -45,6 +64,9 @@ func call(t *testing.T, c *http.Client, method, url, body string, hdr map[string
 	req, err := http.NewRequest(method, url, rd)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	for k, v := range hdr {
 		req.Header.Set(k, v)
@@ -204,7 +226,7 @@ func TestTransferProgressByRecoveryKey(t *testing.T) {
 func TestRestoreWrongKeyAndBruteForceLimit(t *testing.T) {
 	srv, _ := newSessionServer(t, false)
 	c := browser(t)
-	for i := 0; i < 5; i++ {
+	for i := 0; i < restoreFails; i++ {
 		resp, body := call(t, c, http.MethodPost, srv.URL+"/api/session/restore", `{"key":"ZZZZ-ZZZZ-ZZZZ-ZZZ`+strconv.Itoa(i)+`"}`, nil)
 		var e respond.Error
 		decode(t, body, &e)
@@ -225,7 +247,7 @@ func TestRestoreLimitIsPerClientAddressBehindProxy(t *testing.T) {
 	srv, _ := newSessionServer(t, true)
 	c := &http.Client{}
 	bad := `{"key":"ZZZZ-ZZZZ-ZZZZ-ZZZZ"}`
-	for i := 0; i < 5; i++ {
+	for i := 0; i < restoreFails; i++ {
 		call(t, c, http.MethodPost, srv.URL+"/api/session/restore", bad, map[string]string{"X-Forwarded-For": "198.51.100.1"})
 	}
 	resp, _ := call(t, c, http.MethodPost, srv.URL+"/api/session/restore", bad, map[string]string{"X-Forwarded-For": "198.51.100.1"})
@@ -246,7 +268,7 @@ func TestRestoreLimitIsPerClientAddressBehindProxy(t *testing.T) {
 func TestForwardedForIgnoredWithoutTrustedProxy(t *testing.T) {
 	srv, _ := newSessionServer(t, false)
 	c := &http.Client{}
-	for i := 0; i < 5; i++ {
+	for i := 0; i < restoreFails; i++ {
 		call(t, c, http.MethodPost, srv.URL+"/api/session/restore", `{"key":"ZZZZ-ZZZZ-ZZZZ-ZZZZ"}`, map[string]string{"X-Forwarded-For": "10.0.0." + strconv.Itoa(i)})
 	}
 	resp, _ := call(t, c, http.MethodPost, srv.URL+"/api/session/restore", `{"key":"ZZZZ-ZZZZ-ZZZZ-ZZZZ"}`, map[string]string{"X-Forwarded-For": "10.0.0.99"})
@@ -259,7 +281,7 @@ func TestRestoreBadBodies(t *testing.T) {
 	srv, _ := newSessionServer(t, false)
 	c := &http.Client{}
 	for name, body := range map[string]string{"не JSON": "ключ", "пустое тело": ""} {
-		resp, b := call(t, c, http.MethodPost, srv.URL+"/api/session/restore", body, nil)
+		resp, b := call(t, c, http.MethodPost, srv.URL+"/api/session/restore", body, map[string]string{"Content-Type": "application/json"})
 		var e respond.Error
 		decode(t, b, &e)
 		if resp.StatusCode != 400 || e.Code != "bad_request" {
@@ -276,7 +298,7 @@ func TestRestoreBadBodies(t *testing.T) {
 
 func TestNewSessionsAreRateLimited(t *testing.T) {
 	srv, _ := newSessionServer(t, false)
-	for i := 0; i < 20; i++ {
+	for i := 0; i < newSessionsMax; i++ {
 		resp, _ := call(t, &http.Client{}, http.MethodGet, srv.URL+"/api/me", "", nil)
 		if resp.StatusCode != 200 {
 			t.Fatalf("сессия %d: код %d", i, resp.StatusCode)
@@ -284,7 +306,7 @@ func TestNewSessionsAreRateLimited(t *testing.T) {
 	}
 	resp, body := call(t, &http.Client{}, http.MethodGet, srv.URL+"/api/me", "", nil)
 	if resp.StatusCode != 429 || resp.Header.Get("Retry-After") == "" || sidCookie(resp) != nil {
-		t.Fatalf("21-я сессия: код %d, %s", resp.StatusCode, body)
+		t.Fatalf("сессия сверх лимита: код %d, %s", resp.StatusCode, body)
 	}
 	// кто уже вошёл, лимитом не затрагивается
 	c := browser(t)
@@ -330,14 +352,221 @@ func TestLimiterWindow(t *testing.T) {
 	if _, ok := l.Take("a"); !ok {
 		t.Fatal("после окна снова можно")
 	}
-	// Blocked не записывает событие, Hit — записывает
-	l2 := NewLimiter(1, time.Minute)
-	l2.now = func() time.Time { return now }
-	if _, blocked := l2.Blocked("x"); blocked {
-		t.Fatal("пока событий нет, блокировки нет")
+}
+
+func TestLimiterReserveAndRelease(t *testing.T) {
+	l := NewLimiter(2, time.Minute)
+	rel1, _, ok1 := l.Reserve("k")
+	_, _, ok2 := l.Reserve("k")
+	if !ok1 || !ok2 {
+		t.Fatal("два места должны занять")
 	}
-	l2.Hit("x")
-	if retry, blocked := l2.Blocked("x"); !blocked || retry != time.Minute {
-		t.Fatalf("после события: %v %v", retry, blocked)
+	if _, retry, ok := l.Reserve("k"); ok || retry <= 0 {
+		t.Fatalf("третье место занять нельзя: %v %v", retry, ok)
+	}
+	rel1()
+	rel1() // повторный возврат не освобождает чужое место
+	if _, _, ok := l.Reserve("k"); !ok {
+		t.Fatal("после возврата место освободилось")
+	}
+	if _, _, ok := l.Reserve("k"); ok {
+		t.Fatal("повторный release не должен был освободить второе место")
+	}
+}
+
+func TestLimiterReserveIsAtomicUnderConcurrency(t *testing.T) {
+	l := NewLimiter(5, time.Minute)
+	var wg sync.WaitGroup
+	var granted atomic.Int32
+	for i := 0; i < 200; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, _, ok := l.Reserve("one-address"); ok {
+				granted.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if granted.Load() != 5 {
+		t.Fatalf("при лимите 5 прошло %d из 200 параллельных", granted.Load())
+	}
+}
+
+func TestLimiterForgetsIdleKeys(t *testing.T) {
+	now := time.Date(2026, 11, 17, 9, 0, 0, 0, time.UTC)
+	l := NewLimiter(5, time.Minute)
+	l.now = func() time.Time { return now }
+	l.Take("ушёл")
+	now = now.Add(2 * time.Minute)
+	for i := 0; i < 1024; i++ { // периодическая чистка срабатывает раз в 1024 обращения
+		l.Take("активный")
+		now = now.Add(2 * time.Minute)
+	}
+	l.mu.Lock()
+	_, left := l.hits["ушёл"]
+	l.mu.Unlock()
+	if left {
+		t.Fatal("ключ, который больше не обращается, должен исчезнуть из журнала")
+	}
+}
+
+// slowStore имитирует хранилище с задержкой, как Postgres: именно в это окно проходили параллельные запросы.
+type slowStore struct {
+	session.Store
+	delay time.Duration
+	calls atomic.Int32
+}
+
+func (s *slowStore) SessionByRecoveryKey(ctx context.Context, h session.KeyHash) (session.Session, error) {
+	s.calls.Add(1)
+	time.Sleep(s.delay)
+	return s.Store.SessionByRecoveryKey(ctx, h)
+}
+
+func TestRestoreLimitHoldsUnderConcurrency(t *testing.T) {
+	st := &slowStore{Store: memstore.New(), delay: 20 * time.Millisecond}
+	srv, _ := newServerWith(t, false, st, nil)
+	const n = 100
+	var wg sync.WaitGroup
+	var notFound, limited, other atomic.Int32
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, _ := call(t, &http.Client{}, http.MethodPost, srv.URL+"/api/session/restore", `{"key":"ZZZZ-ZZZZ-ZZZZ-ZZZZ"}`, nil)
+			switch resp.StatusCode {
+			case 404:
+				notFound.Add(1)
+			case 429:
+				limited.Add(1)
+			default:
+				other.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if notFound.Load() != restoreFails || limited.Load() != n-restoreFails || other.Load() != 0 {
+		t.Fatalf("из %d параллельных: 404=%d, 429=%d, прочих=%d; ожидали ровно %d проверок ключа",
+			n, notFound.Load(), limited.Load(), other.Load(), restoreFails)
+	}
+	if st.calls.Load() != restoreFails {
+		t.Fatalf("в хранилище дошло %d запросов вместо %d", st.calls.Load(), restoreFails)
+	}
+}
+
+func TestRestoreRequiresJSONContentType(t *testing.T) {
+	srv, _ := newSessionServer(t, false)
+	a := browser(t)
+	call(t, a, http.MethodGet, srv.URL+"/api/me", "", nil)
+	_, body := call(t, a, http.MethodPost, srv.URL+"/api/session/recovery-key", "", nil)
+	var k struct{ Key string }
+	decode(t, body, &k)
+
+	// форма с чужого сайта (enctype=text/plain) шлёт валидный JSON, но не application/json
+	for _, ct := range []string{"text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x"} {
+		resp, b := call(t, &http.Client{}, http.MethodPost, srv.URL+"/api/session/restore", `{"key":"`+k.Key+`","x":"="}`, map[string]string{"Content-Type": ct})
+		var e respond.Error
+		decode(t, b, &e)
+		if resp.StatusCode != http.StatusUnsupportedMediaType || e.Code != "unsupported_media_type" || sidCookie(resp) != nil {
+			t.Errorf("%s: код %d, cookie %v, тело %s", ct, resp.StatusCode, sidCookie(resp), b)
+		}
+	}
+	resp, _ := call(t, &http.Client{}, http.MethodPost, srv.URL+"/api/session/restore", `{"key":"`+k.Key+`"}`, nil)
+	if resp.StatusCode != 200 || sidCookie(resp) == nil {
+		t.Fatalf("с application/json ключ должен подходить: код %d", resp.StatusCode)
+	}
+}
+
+func TestSuccessfulAndMalformedRestoresDoNotUseUpLimit(t *testing.T) {
+	srv, _ := newSessionServer(t, false)
+	a := browser(t)
+	call(t, a, http.MethodGet, srv.URL+"/api/me", "", nil)
+	_, body := call(t, a, http.MethodPost, srv.URL+"/api/session/recovery-key", "", nil)
+	var k struct{ Key string }
+	decode(t, body, &k)
+	c := &http.Client{}
+	for i := 0; i < 3*restoreFails; i++ {
+		if resp, _ := call(t, c, http.MethodPost, srv.URL+"/api/session/restore", `{"key":"`+k.Key+`"}`, nil); resp.StatusCode != 200 {
+			t.Fatalf("удачный restore %d: код %d", i, resp.StatusCode)
+		}
+		if resp, _ := call(t, c, http.MethodPost, srv.URL+"/api/session/restore", "не JSON", nil); resp.StatusCode != 400 {
+			t.Fatalf("мусорное тело %d: код %d", i, resp.StatusCode)
+		}
+	}
+	if resp, _ := call(t, c, http.MethodPost, srv.URL+"/api/session/restore", `{"key":"ZZZZ-ZZZZ-ZZZZ-ZZZZ"}`, nil); resp.StatusCode != 404 {
+		t.Fatalf("после удачных попыток неверный ключ должен давать 404, код %d", resp.StatusCode)
+	}
+}
+
+func TestGlobalRestoreLimitStopsDistributedGuessing(t *testing.T) {
+	srv, _ := newServerWith(t, true, memstore.New(), func(a *Sessions) { a.restoreAll = NewLimiter(3, time.Minute) })
+	c := &http.Client{}
+	for i := 0; i < 3; i++ {
+		resp, _ := call(t, c, http.MethodPost, srv.URL+"/api/session/restore", `{"key":"ZZZZ-ZZZZ-ZZZZ-ZZZZ"}`, map[string]string{"X-Forwarded-For": "203.0.113." + strconv.Itoa(i+1)})
+		if resp.StatusCode != 404 {
+			t.Fatalf("попытка %d: код %d", i, resp.StatusCode)
+		}
+	}
+	resp, _ := call(t, c, http.MethodPost, srv.URL+"/api/session/restore", `{"key":"ZZZZ-ZZZZ-ZZZZ-ZZZZ"}`, map[string]string{"X-Forwarded-For": "203.0.113.200"})
+	if resp.StatusCode != 429 {
+		t.Fatalf("с нового адреса сверх общего лимита: код %d", resp.StatusCode)
+	}
+}
+
+func TestIPv6LimitedByPrefix(t *testing.T) {
+	srv, _ := newSessionServer(t, true)
+	c := &http.Client{}
+	bad := `{"key":"ZZZZ-ZZZZ-ZZZZ-ZZZZ"}`
+	for i := 0; i < restoreFails; i++ { // разные адреса одной подсети /64
+		call(t, c, http.MethodPost, srv.URL+"/api/session/restore", bad, map[string]string{"X-Forwarded-For": "2001:db8:0:0::" + strconv.Itoa(i+1)})
+	}
+	same, _ := call(t, c, http.MethodPost, srv.URL+"/api/session/restore", bad, map[string]string{"X-Forwarded-For": "2001:db8:0:0:ffff::1"})
+	other, _ := call(t, c, http.MethodPost, srv.URL+"/api/session/restore", bad, map[string]string{"X-Forwarded-For": "2001:db8:0:1::1"})
+	if same.StatusCode != 429 || other.StatusCode != 404 {
+		t.Fatalf("та же /64: %d (ждали 429), другая /64: %d (ждали 404)", same.StatusCode, other.StatusCode)
+	}
+}
+
+func TestForwardedForUsesLastValueOfLastHeaderLine(t *testing.T) {
+	srv, _ := newSessionServer(t, true)
+	bad := `{"key":"ZZZZ-ZZZZ-ZZZZ-ZZZZ"}`
+	send := func(lines ...string) int {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/session/restore", strings.NewReader(bad))
+		req.Header.Set("Content-Type", "application/json")
+		for _, l := range lines {
+			req.Header.Add("X-Forwarded-For", l)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	for i := 0; i < restoreFails; i++ {
+		// подделка в первой строке, настоящий адрес (дописанный прокси) в последней
+		send("198.51.100."+strconv.Itoa(i+10), "203.0.113.7")
+	}
+	if code := send("198.51.100.99", "203.0.113.7"); code != 429 {
+		t.Fatalf("подделка в первой строке заголовка обошла лимит: код %d", code)
+	}
+}
+
+func TestWarnsOnceWhenProxyHeadersArriveWithoutTrustProxy(t *testing.T) {
+	srv, logs := newSessionServer(t, false)
+	for i := 0; i < 3; i++ {
+		call(t, &http.Client{}, http.MethodGet, srv.URL+"/api/me", "", map[string]string{"X-Forwarded-For": "203.0.113.1"})
+	}
+	if n := strings.Count(logs.String(), "TRUST_PROXY выключен"); n != 1 {
+		t.Fatalf("предупреждение должно быть ровно одно, получили %d: %s", n, logs.String())
+	}
+
+	srv2, logs2 := newSessionServer(t, false)
+	call(t, &http.Client{}, http.MethodGet, srv2.URL+"/api/me", "", nil)
+	srv3, logs3 := newSessionServer(t, true)
+	call(t, &http.Client{}, http.MethodGet, srv3.URL+"/api/me", "", map[string]string{"X-Forwarded-For": "203.0.113.1"})
+	if strings.Contains(logs2.String(), "TRUST_PROXY") || strings.Contains(logs3.String(), "TRUST_PROXY") {
+		t.Fatal("без заголовков прокси и при включённом TRUST_PROXY предупреждения быть не должно")
 	}
 }

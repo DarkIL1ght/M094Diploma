@@ -32,7 +32,6 @@ func New() *Store {
 		tokens:   map[session.TokenHash]tokenRec{},
 		keys:     map[session.KeyHash]string{},
 		keyOf:    map[string]session.KeyHash{},
-		hasKey:   map[string]bool{},
 	}
 }
 
@@ -88,12 +87,11 @@ func (m *Store) SetRecoveryKey(_ context.Context, sessionID string, key session.
 	if !ok {
 		return session.ErrNotFound
 	}
-	if m.hasKey[sessionID] {
-		delete(m.keys, m.keyOf[sessionID]) // прежний ключ перестаёт работать
+	if old, ok := m.keyOf[sessionID]; ok {
+		delete(m.keys, old) // прежний ключ перестаёт работать
 	}
 	m.keys[key] = sessionID
 	m.keyOf[sessionID] = key
-	m.hasKey[sessionID] = true
 	t := issued
 	s.RecoveryIssuedAt = &t
 	return nil
@@ -107,6 +105,32 @@ func (m *Store) SessionByRecoveryKey(_ context.Context, key session.KeyHash) (se
 		return session.Session{}, session.ErrNotFound
 	}
 	return *m.sessions[id], nil
+}
+
+func (m *Store) DeleteExpired(_ context.Context, before time.Time) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	alive := map[string]bool{}
+	for h, rec := range m.tokens {
+		if rec.lastSeen.Before(before) {
+			delete(m.tokens, h)
+			continue
+		}
+		alive[rec.sessionID] = true
+	}
+	deleted := 0
+	for id := range m.sessions {
+		if alive[id] {
+			continue
+		}
+		if k, ok := m.keyOf[id]; ok {
+			delete(m.keys, k)
+			delete(m.keyOf, id)
+		}
+		delete(m.sessions, id)
+		deleted++
+	}
+	return deleted, nil
 }
 
 // TokenHashes возвращает все хранимые хэши токенов: для проверки в тестах, что открытых токенов в хранилище нет.

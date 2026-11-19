@@ -54,6 +54,9 @@ type Store interface {
 	SetRecoveryKey(ctx context.Context, sessionID string, key KeyHash, issued time.Time) error
 	// SessionByRecoveryKey находит сессию по хэшу ключа; нет такого — ErrNotFound.
 	SessionByRecoveryKey(ctx context.Context, key KeyHash) (Session, error)
+	// DeleteExpired удаляет токены, не использованные с момента before, и сессии, у которых не осталось токенов
+	// (вместе с их ключами восстановления). Возвращает число удалённых сессий.
+	DeleteExpired(ctx context.Context, before time.Time) (int, error)
 }
 
 // Service — сценарии работы с сессиями.
@@ -169,4 +172,27 @@ func (s *Service) Restore(ctx context.Context, key string) (Session, string, err
 		return Session{}, "", err
 	}
 	return sess, token, nil
+}
+
+// Cleanup удаляет просроченные токены и брошенные сессии: токен, которым не пользовались дольше срока жизни,
+// всё равно не пройдёт Resolve. Возвращает число удалённых сессий.
+func (s *Service) Cleanup(ctx context.Context) (int, error) {
+	return s.store.DeleteExpired(ctx, s.now().Add(-s.ttl).UTC())
+}
+
+// RunCleanup вызывает Cleanup каждые every, пока ctx не отменён; итог каждого запуска передаётся в report.
+// Нужен, пока хранилище растёт само: каждый GET /api/me без cookie (боты, проверки доступности, приватные
+// вкладки) добавляет сессию.
+func (s *Service) RunCleanup(ctx context.Context, every time.Duration, report func(deleted int, err error)) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			n, err := s.Cleanup(ctx)
+			report(n, err)
+		}
+	}
 }
