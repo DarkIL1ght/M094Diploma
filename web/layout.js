@@ -32,16 +32,21 @@ export function pageLink(href, label) {
   return link;
 }
 
-function populateLinks(container, items, route, groupSections = false) {
-  const exactLink = items.find(([href]) => href === route.path);
-  const currentLink = exactLink ?? (groupSections && items.find(([, , section]) => section === route.section));
-
-  for (const item of items) {
-    const [href, label] = item;
+function createNavigation(container, items) {
+  const entries = items.map(([href, label, section]) => {
     const link = pageLink(href, label);
-    if (item === currentLink) link.setAttribute('aria-current', exactLink ? 'page' : 'location');
     container.append(link);
-  }
+    return { href, section, link };
+  });
+
+  let current;
+  return (route) => {
+    const exact = entries.find(({ href }) => href === route.path);
+    const next = exact ?? entries.find(({ section }) => section === route.section);
+    if (current !== next) current?.link.removeAttribute('aria-current');
+    next?.link.setAttribute('aria-current', exact ? 'page' : 'location');
+    current = next;
+  };
 }
 
 export function createLayout(root) {
@@ -49,7 +54,7 @@ export function createLayout(root) {
     <a class="skip-link" href="#main">К содержанию</a>
     <header class="site-header">
       <div class="header-inner">
-        <button class="menu-open" type="button" aria-controls="site-menu" aria-haspopup="dialog" aria-expanded="false">☰ <span>Меню</span></button>
+        <button class="menu-open" type="button" aria-controls="site-menu" aria-haspopup="dialog" aria-expanded="false"><span aria-hidden="true">☰</span> Меню</button>
         <a class="brand" href="/" data-route>ExamPrep</a>
         <nav class="desktop-nav" aria-label="Основная навигация"></nav>
         <nav class="account-nav" aria-label="Аккаунт"></nav>
@@ -67,13 +72,23 @@ export function createLayout(root) {
   `;
 
   const header = root.querySelector('.site-header');
-  const desktop = root.querySelector('.desktop-nav');
-  const account = root.querySelector('.account-nav');
   const mobile = root.querySelector('.mobile-nav');
-  const drawer = root.querySelector('.drawer-nav');
   const dialog = root.querySelector('.site-menu');
   const openButton = root.querySelector('.menu-open');
+  const brand = root.querySelector('.brand');
   const main = root.querySelector('main');
+  const markDesktop = createNavigation(root.querySelector('.desktop-nav'), desktopLinks);
+  const markAccount = createNavigation(root.querySelector('.account-nav'), [
+    ['/me', 'Профиль', 'profile'], ['/settings', 'Настройки', 'profile'],
+  ]);
+  const markDrawer = createNavigation(root.querySelector('.drawer-nav'), menuLinks);
+  const markMobile = createNavigation(mobile, mobileLinks);
+
+  root.querySelector('.skip-link').addEventListener('click', (event) => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    (main.querySelector('h1') ?? main).focus();
+  });
 
   openButton.addEventListener('click', () => {
     dialog.showModal();
@@ -82,7 +97,10 @@ export function createLayout(root) {
   root.querySelector('.menu-close').addEventListener('click', () => dialog.close());
   dialog.addEventListener('close', () => openButton.setAttribute('aria-expanded', 'false'));
   window.matchMedia('(min-width: 1024px)').addEventListener('change', (event) => {
-    if (event.matches && dialog.open) dialog.close();
+    if (event.matches && dialog.open) {
+      dialog.close();
+      brand.focus();
+    }
   });
 
   return (route, content, focus) => {
@@ -91,22 +109,18 @@ export function createLayout(root) {
     header.hidden = exam;
     mobile.hidden = exam;
 
-    desktop.replaceChildren();
-    account.replaceChildren();
-    drawer.replaceChildren();
-    mobile.replaceChildren();
-    if (!exam) {
-      populateLinks(desktop, desktopLinks, route, true);
-      populateLinks(account, [['/me', 'Профиль', 'profile'], ['/settings', 'Настройки', 'profile']], route, true);
-      populateLinks(drawer, menuLinks, route, true);
-      populateLinks(mobile, mobileLinks, route, true);
-    }
+    markDesktop(route);
+    markAccount(route);
+    markDrawer(route);
+    markMobile(route);
 
     root.classList.toggle('exam-layout', exam);
+    const heading = content.querySelector('h1');
+    if (heading) heading.tabIndex = -1;
     main.replaceChildren(content);
     if (focus) {
-      main.focus({ preventScroll: true });
       window.scrollTo(0, 0);
+      (heading ?? main).focus();
     }
   };
 }
