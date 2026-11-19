@@ -1276,6 +1276,7 @@ components:
             - no_session
             - forbidden_origin
             - not_found
+            - method_not_allowed
             - invalid_key
             - rate_limited
             - payload_too_large

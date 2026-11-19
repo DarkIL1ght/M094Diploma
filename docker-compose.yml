@@ -33,7 +33,9 @@ services:
   mock:
     profiles: [mock]
     image: stoplight/prism:5
-    command: mock -h 0.0.0.0 -p 4010 /api/openapi.yaml
+    # --multiprocess=false: в образе Prism в многопроцессном режиме падает при старте
+    # (TypeError: Cannot read properties of undefined (reading 'isPrimary')); для мока хватит одного процесса.
+    command: mock --multiprocess=false -h 0.0.0.0 -p 4010 /api/openapi.yaml
     volumes:
       - ./api:/api:ro
     ports: ["127.0.0.1:${MOCK_PORT:-4010}:4010"]

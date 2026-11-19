@@ -123,7 +123,7 @@ jobs:
           deploy/restore-check.sh
       - name: Логи при ошибке
         if: failure()
-        run: docker compose logs
+        run: docker compose --profile app --profile mock logs --no-color
       - name: make down
         if: always()
         run: make reset
