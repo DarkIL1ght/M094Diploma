@@ -22,7 +22,22 @@ test('фиксированные маршруты /kt/new и /kt/new/:direction 
   const { route, params } = matchRoute('/kt/new/profile');
   assert.equal(route.path, '/kt/new/:direction');
   assert.deepEqual(params, { direction: 'profile' });
-  assert.equal(matchRoute('/kt/42').route.exam, true);
+});
+
+test('включает режим без навигации только на экранах прохождения', () => {
+  for (const prefix of ['/test', '/kt']) {
+    const { route, params } = matchRoute(`${prefix}/42`);
+    assert.equal(route.path, `${prefix}/:attemptId`);
+    assert.deepEqual(params, { attemptId: '42' });
+    assert.equal(route.exam, true);
+  }
+
+  for (const path of ['/', '/practice', '/kt', '/kt/new', '/kt/new/profile',
+    '/test/42/result', '/test/42/review', '/kt/42/result', '/kt/42/review']) {
+    const { route } = matchRoute(path);
+    assert.notEqual(route, notFound, path);
+    assert.notEqual(route.exam, true, path);
+  }
 });
 
 test('принимает завершающий слэш', () => {

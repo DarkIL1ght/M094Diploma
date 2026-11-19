@@ -5,7 +5,7 @@ export const routes = [
   { path: '/learn', title: 'Предметы', section: 'learn' },
   { path: '/learn/:subject', title: 'Темы предмета', section: 'learn' },
   { path: '/learn/:subject/:topic/:section', title: 'Урок', section: 'learn' },
-  { path: '/test/:attemptId', title: 'Прохождение теста', section: 'learn' },
+  { path: '/test/:attemptId', title: 'Прохождение теста', section: 'learn', exam: true },
   { path: '/test/:attemptId/result', title: 'Итог теста', section: 'learn' },
   { path: '/test/:attemptId/review', title: 'Разбор теста', section: 'learn' },
   { path: '/practice', title: 'Практика', section: 'practice' },
