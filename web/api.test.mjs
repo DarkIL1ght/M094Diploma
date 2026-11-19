@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ApiError, createApi } from './api.js';
 
-test('запрашивает предметы с куками и возвращает объект items', async (t) => {
+test('принимает явный credentials: include и возвращает объект items', async (t) => {
   const data = { items: [{ id: 'algorithms', title: 'Алгоритмы', topics_total: 14, topics_done: 9, accuracy: null }] };
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     assert.equal(url, 'http://127.0.0.1:4010/api/subjects');
@@ -10,11 +10,17 @@ test('запрашивает предметы с куками и возвращ�
     assert.equal(options.headers.get('Accept'), 'application/json');
     return Response.json(data);
   });
-  assert.deepEqual(await createApi({ baseUrl: 'http://127.0.0.1:4010/' }).listSubjects(), data);
+  const api = createApi({ baseUrl: 'http://127.0.0.1:4010/', credentials: 'include' });
+  assert.deepEqual(await api.listSubjects(), data);
 });
 
-test('использует относительный адрес для сессии и endpoint тем из B-01', async (t) => {
-  const fetchMock = t.mock.method(globalThis, 'fetch', async () => Response.json({}));
+test('работает без браузерных глобальных переменных и использует same-origin по умолчанию', async (t) => {
+  assert.equal(typeof globalThis.window, 'undefined');
+  assert.equal(typeof globalThis.document, 'undefined');
+  const fetchMock = t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    assert.equal(options.credentials, 'same-origin');
+    return Response.json({});
+  });
   const api = createApi();
   await api.getMe();
   await api.listTopics('algorithms');

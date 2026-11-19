@@ -10,20 +10,8 @@ export class ApiError extends Error {
   }
 }
 
-export function createApi({ baseUrl = '', mock = false } = {}) {
+export function createApi({ baseUrl = '', credentials = 'same-origin' } = {}) {
   const base = baseUrl.replace(/\/+$/, '');
-
-  if (mock) {
-    const target = new URL(base, window.location.href);
-    if (!['localhost', '127.0.0.1'].includes(target.hostname) ||
-        target.hostname !== window.location.hostname ||
-        target.protocol !== 'http:' || window.location.protocol !== 'http:') {
-      throw new TypeError('Для мока откройте сайт и Prism на одном локальном HTTP-хосте.');
-    }
-    if (!document.cookie.split(';').some((cookie) => cookie.trim().startsWith('sid='))) {
-      document.cookie = 'sid=mock; Path=/; SameSite=Lax';
-    }
-  }
 
   async function request(path, { method = 'GET', json, headers, signal } = {}) {
     if (!path.startsWith('/api/')) throw new TypeError('Ожидается путь из контракта /api/.');
@@ -38,7 +26,7 @@ export function createApi({ baseUrl = '', mock = false } = {}) {
       response = await fetch(`${base}${path}`, {
         method,
         headers: requestHeaders,
-        credentials: 'include',
+        credentials,
         body,
         signal,
       });
