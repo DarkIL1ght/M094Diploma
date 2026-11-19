@@ -87,7 +87,7 @@ export function createLayout(root) {
   root.querySelector('.skip-link').addEventListener('click', (event) => {
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
-    main.querySelector('h1').focus();
+    (main.querySelector('h1') ?? main).focus();
   });
 
   openButton.addEventListener('click', () => {
@@ -95,7 +95,7 @@ export function createLayout(root) {
     openButton.setAttribute('aria-expanded', 'true');
   });
   root.querySelector('.menu-close').addEventListener('click', () => dialog.close());
-  dialog.addEventListener('close', () => openButton.setAttribute('aria-expanded', String(dialog.open)));
+  dialog.addEventListener('close', () => openButton.setAttribute('aria-expanded', 'false'));
   window.matchMedia('(min-width: 1024px)').addEventListener('change', (event) => {
     if (event.matches && dialog.open) {
       dialog.close();
@@ -116,11 +116,11 @@ export function createLayout(root) {
 
     root.classList.toggle('exam-layout', exam);
     const heading = content.querySelector('h1');
-    heading.tabIndex = -1;
+    if (heading) heading.tabIndex = -1;
     main.replaceChildren(content);
     if (focus) {
       window.scrollTo(0, 0);
-      heading.focus();
+      (heading ?? main).focus();
     }
   };
 }
