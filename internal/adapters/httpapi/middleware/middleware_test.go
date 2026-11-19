@@ -170,3 +170,41 @@ func TestStatusWriterStartedAndStatus(t *testing.T) {
 		t.Fatal("Flush отправляет заголовки: ответ начат с 200")
 	}
 }
+
+func TestRequireJSON(t *testing.T) {
+	called := 0
+	h := RequireJSON(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called++ }))
+	cases := []struct {
+		contentType string
+		ok          bool
+	}{
+		{"application/json", true},
+		{"application/json; charset=utf-8", true},
+		{"APPLICATION/JSON", true},
+		{"text/plain", false},
+		{"text/plain; charset=utf-8", false},
+		{"application/x-www-form-urlencoded", false},
+		{"multipart/form-data; boundary=x", false},
+		{"application/jsonx", false},
+		{"", false},
+		{";;;", false},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("{}"))
+		if c.contentType != "" {
+			req.Header.Set("Content-Type", c.contentType)
+		}
+		rec := httptest.NewRecorder()
+		before := called
+		h.ServeHTTP(rec, req)
+		if c.ok && (rec.Code != http.StatusOK || called != before+1) {
+			t.Errorf("%q: должен пройти, код %d", c.contentType, rec.Code)
+		}
+		if !c.ok {
+			var e struct{ Code string }
+			if rec.Code != http.StatusUnsupportedMediaType || called != before || json.Unmarshal(rec.Body.Bytes(), &e) != nil || e.Code != "unsupported_media_type" {
+				t.Errorf("%q: ожидали 415 unsupported_media_type, получили %d %s", c.contentType, rec.Code, rec.Body.String())
+			}
+		}
+	}
+}

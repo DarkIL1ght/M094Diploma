@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -21,6 +22,9 @@ type Config struct {
 	LogLevel slog.Level
 	// LogFormat — формат логов (LOG_FORMAT): json для сервера, text для чтения глазами.
 	LogFormat string
+	// TrustProxy — доверять заголовкам X-Forwarded-For и X-Forwarded-Proto обратного прокси (TRUST_PROXY=true).
+	// Включать, только когда сервер не доступен напрямую, иначе адрес клиента можно подделать.
+	TrustProxy bool
 	// ShutdownTimeout — сколько ждать завершения запросов при остановке (SHUTDOWN_TIMEOUT, например 10s).
 	ShutdownTimeout time.Duration
 }
@@ -51,6 +55,13 @@ func Load(getenv func(string) string) (Config, error) {
 			cfg.LogFormat = v
 		}
 	}
+	if v := strings.TrimSpace(getenv("TRUST_PROXY")); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("TRUST_PROXY=%q: допустимо true или false", v))
+		}
+		cfg.TrustProxy = b
+	}
 	if v := strings.TrimSpace(getenv("SHUTDOWN_TIMEOUT")); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil || d <= 0 {
@@ -72,6 +83,7 @@ func (c Config) LogValue() slog.Value {
 		slog.Bool("database", c.DatabaseURL != ""),
 		slog.String("log_level", c.LogLevel.String()),
 		slog.String("log_format", c.LogFormat),
+		slog.Bool("trust_proxy", c.TrustProxy),
 		slog.String("shutdown_timeout", c.ShutdownTimeout.String()),
 	)
 }
