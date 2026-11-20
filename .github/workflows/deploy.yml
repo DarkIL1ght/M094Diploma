@@ -1,0 +1,161 @@
+# S-13. Автовыкатка: main → staging, тег vX.Y.Z → prod. Образ под linux/arm64 (VM Oracle Ampere) уходит в GHCR,
+# на сервер по SSH копируются deploy/compose.yml и скрипты, deploy/deploy.sh перезапускает окружение и ждёт healthy.
+# main выкатывается только после зелёного CI на том же коммите (workflow_run), тег — если CI был зелёным на его коммите.
+# Секреты и разовые шаги на сервере — docs/server.md, «Секреты» и «Выкатка».
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/darkil1ght/m094diploma  # GHCR принимает имена только в нижнем регистре
+
+jobs:
+  image:
+    name: Образ (GHCR, linux/arm64)
+    # workflow_run приходит и на упавший или отменённый CI — выкатываем только зелёный пуш в main
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: image-${{ github.event_name == 'push' && 'production' || 'staging' }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+      actions: read  # gh run list: был ли зелёный CI на коммите тега
+    outputs:
+      sha: ${{ steps.meta.outputs.sha }}
+      tag: ${{ steps.meta.outputs.tag }}
+      environment: ${{ steps.meta.outputs.environment }}
+      dir: ${{ steps.meta.outputs.dir }}
+      moving: ${{ steps.meta.outputs.moving }}
+    steps:
+      - name: Что выкатываем
+        id: meta
+        env:
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            tag=$GITHUB_REF_NAME
+            echo "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "тег $tag не вида vX.Y.Z" >&2; exit 1; }
+            sha=$GITHUB_SHA environment=production dir=m094diploma moving=latest
+          else
+            # у workflow_run GITHUB_SHA — вершина main на момент запуска, а не проверенный CI коммит
+            sha=$RUN_SHA tag=sha-${RUN_SHA::7} environment=staging dir=m094diploma-staging moving=main
+          fi
+          {
+            echo "sha=$sha"
+            echo "tag=$tag"
+            echo "environment=$environment"
+            echo "dir=$dir"
+            echo "moving=$moving"
+          } >>"$GITHUB_OUTPUT"
+      - name: CI на коммите тега зелёный
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.meta.outputs.sha }}
+        run: |
+          ok=$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --event push --branch main             --commit "$SHA" --status success --json databaseId --jq length)
+          [ "$ok" -gt 0 ] || { echo "на $SHA нет зелёного CI пуша в main: тег ставят на коммит main после CI" >&2; exit 1; }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          ref: ${{ steps.meta.outputs.sha }}
+      # QEMU не нужен: Dockerfile собирает Go на платформе runner'а под TARGETARCH, в arm64-слое нет RUN.
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      # Здесь только неизменяемый тег; main/latest переставляет задание deploy после healthy.
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
+        with:
+          context: .  # каталог с checkout нужного коммита; без него buildx взял бы git-контекст GITHUB_SHA
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.meta.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Выкатка (${{ needs.image.outputs.environment }})
+    needs: image
+    runs-on: ubuntu-latest
+    # production — GitHub Environment: в настройках репо на нём можно включить ручное подтверждение выкатки
+    environment: ${{ needs.image.outputs.environment }}
+    # Выкатки одного окружения идут по очереди, начатую не обрываем: сервер не должен остаться на полпути.
+    concurrency:
+      group: deploy-${{ needs.image.outputs.environment }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write  # перестановка тега main/latest
+    env:
+      ENVIRONMENT: ${{ needs.image.outputs.environment }}
+      DIR: ${{ needs.image.outputs.dir }}  # относительно домашнего каталога SSH_USER
+      TAG: ${{ needs.image.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          ref: ${{ needs.image.outputs.sha }}
+          sparse-checkout: deploy
+      # Ключ хоста проверяется по SSH_KNOWN_HOSTS (StrictHostKeyChecking yes): подменённый сервер не получит ни файлов, ни команд.
+      - name: Доступ по SSH
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          install -m 600 /dev/null ~/.ssh/id_deploy
+          printf '%s\n' "$SSH_KEY" >~/.ssh/id_deploy
+          printf '%s\n' "$SSH_KNOWN_HOSTS" >~/.ssh/known_hosts
+          cat >~/.ssh/config <<EOF
+          Host server
+            HostName $SSH_HOST
+            User $SSH_USER
+            IdentityFile ~/.ssh/id_deploy
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+          EOF
+      # .env на сервере не трогаем: его заводят руками (docs/server.md, «Секреты»)
+      - name: Файлы окружения на сервер
+        run: |
+          ssh server "mkdir -p '$DIR/deploy'"
+          scp deploy/compose.yml "server:$DIR/compose.yml"
+          scp deploy/deploy.sh deploy/backup.sh deploy/restore-check.sh "server:$DIR/deploy/"
+          ssh server "chmod +x '$DIR'/deploy/*.sh"
+      # TODO S-03: применить миграции. Их запуск встанет в deploy/deploy.sh между подъёмом db и app
+      # (там же закомментированный пример), чтобы ручной откат шёл тем же путём. Отдельный шаг здесь, если понадобится:
+      # - name: Миграции
+      #   run: ssh server "cd '$DIR' && IMAGE_TAG='$TAG' docker compose run --rm m094-app migrate up"
+      - name: Выкатка и ожидание healthy
+        run: |
+          backup=
+          if [ "$ENVIRONMENT" = production ]; then backup=--backup; fi
+          ssh server "'$DIR/deploy/deploy.sh' $backup '$TAG'"
+      # main/latest показывают на то, что реально работает: переставляем только после healthy.
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Тег ${{ needs.image.outputs.moving }} на выкаченный образ
+        env:
+          MOVING: ${{ needs.image.outputs.moving }}
+        run: docker buildx imagetools create --tag "$IMAGE:$MOVING" "$IMAGE:$TAG"

@@ -77,6 +77,10 @@ flowchart LR
 Остановка по `SIGTERM` или Ctrl+C: сервер перестаёт принимать соединения, ждёт текущие запросы до `SHUTDOWN_TIMEOUT`,
 оставшиеся обрывает. Неверные настройки — код выхода 2 и все ошибки сразу.
 
+Все переменные с комментариями — `.env.example`; на сервере они в `.env` окружения (S-17). Выкатка (S-13): пуш в `main`
+после зелёного CI → образ `linux/arm64` в GHCR → staging, тег `vX.Y.Z` → prod; `deploy/compose.yml` + `deploy/deploy.sh`,
+подробности, откат и разовые шаги — `docs/server.md`, «Выкатка».
+
 ## Сессии без регистрации (B-03)
 
 Пакет `internal/app/session`, HTTP — `internal/adapters/httpapi/sessions.go`.
