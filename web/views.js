@@ -39,6 +39,31 @@ function linkList(items, className) {
   return list;
 }
 
+function appearanceSettings() {
+  const settings = document.createElement('fieldset');
+  settings.className = 'appearance-settings';
+  settings.innerHTML = `
+    <legend>Оформление</legend>
+    <label>Тема
+      <select name="theme" data-appearance>
+        <option value="system">Как в системе</option>
+        <option value="light">Светлая</option>
+        <option value="dark">Тёмная</option>
+      </select>
+    </label>
+    <label>Акцент
+      <select name="accent" data-appearance></select>
+    </label>`;
+
+  settings.querySelector('select[name="accent"]').append(document.getElementById('accent-options').content.cloneNode(true));
+
+  for (const control of settings.querySelectorAll('select')) {
+    const value = document.documentElement.dataset[control.name];
+    if (value) control.value = value;
+  }
+  return settings;
+}
+
 export function createView(route, params) {
   const page = document.createElement('div');
   page.className = 'page';
@@ -60,6 +85,8 @@ export function createView(route, params) {
   } else if (route.path === '/') {
     heading.textContent = 'Подготовка к комплексному тестированию';
     description.textContent = 'Для поступающих в магистратуру.';
+  } else if (route.path === '/settings') {
+    description.replaceWith(appearanceSettings());
   } else if (route.path === '/learn' || route.path === '/practice' || route.path === '/me') {
     description.remove();
   }
