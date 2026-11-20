@@ -2,10 +2,10 @@
 # Ежедневная копия базы (S-14). Запуск из cron на сервере:
 #   15 4 * * * $HOME/m094diploma/deploy/backup.sh >>$HOME/m094diploma-backups.log 2>&1
 # Копии — в $BACKUP_DIR (по умолчанию ~/m094diploma-backups), формат pg_dump custom, хранятся $KEEP_DAYS дней.
-# Compose-файл и env берутся из COMPOSE_FILE / ENV_FILE (по умолчанию compose.prod.yml и .env на сервере).
+# Compose-файл и env берутся из COMPOSE_FILE / ENV_FILE (по умолчанию compose.yml и .env на сервере, S-13).
 set -eu
 cd "$(dirname "$0")/.."
-compose_file="${COMPOSE_FILE:-compose.prod.yml}"
+compose_file="${COMPOSE_FILE:-compose.yml}"
 env_file="${ENV_FILE:-.env}"
 dir="${BACKUP_DIR:-$HOME/m094diploma-backups}"
 keep="${KEEP_DAYS:-14}"

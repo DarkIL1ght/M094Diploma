@@ -1,0 +1,48 @@
+# S-13. Окружение на сервере: один файл для staging и prod. CI копирует его в каталог окружения как compose.yml,
+# рядом лежит .env этого окружения (образец .env.example, docs/server.md):
+#   ~/m094diploma/          prod     → compose-проект m094diploma
+#   ~/m094diploma-staging/  staging  → compose-проект m094diploma-staging
+# Имя compose-проекта берётся из имени каталога, поэтому у окружений свои контейнеры, база и том.
+# Наружу порты не публикуются: на app проксирует общий Caddy по своей сети CADDY_NETWORK под именем APP_ALIAS.
+# Запуск — deploy/deploy.sh <тег образа>.
+
+services:
+  app:
+    image: ghcr.io/darkil1ght/m094diploma:${IMAGE_TAG:?нужен тег образа, см. deploy/deploy.sh}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Перед app всегда стоит Caddy: без этого лимиты сессий считаются на адрес Caddy, а cookie без Secure.
+      TRUST_PROXY: "true"
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?sslmode=disable
+    # healthcheck уже в образе (server healthcheck), deploy.sh ждёт по нему healthy
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      default:
+      caddy:
+        aliases: ["${APP_ALIAS:?задай APP_ALIAS в .env}"]
+
+  db:  # только в своей сети проекта: в сети Caddy базе делать нечего
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?задай POSTGRES_USER в .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задай POSTGRES_PASSWORD в .env}
+      POSTGRES_DB: ${POSTGRES_DB:?задай POSTGRES_DB в .env}
+    volumes:
+      - pgdata:/var/lib/postgresql  # у postgres 18 данные в подкаталоге версии, монтируем родителя
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:
+
+networks:
+  caddy:
+    name: ${CADDY_NETWORK:?задай CADDY_NETWORK в .env}
+    external: true
