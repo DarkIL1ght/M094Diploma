@@ -1,0 +1,8 @@
+# S-17. Настройки gitleaks (CI, задание «Секреты в git»): стандартные правила плюс исключения.
+# Исключение — только для строки, которая точно не секрет; настоящий ключ в git не прячем, а ротируем (docs/server.md).
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Алфавит Crockford base32 для ключей сессии (internal/app/session) — не секрет"
+regexes = ['''^0123456789ABCDEFGHJKMNPQRSTVWXYZ$''']
