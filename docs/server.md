@@ -86,11 +86,15 @@ CI `.env` не читает и не перезаписывает: при вык�
 | prod | тег `vX.Y.Z` на коммите `main` с зелёным CI | `~/m094diploma` | `m094diploma` | `vX.Y.Z`, `latest` |
 
 Как идёт (`.github/workflows/deploy.yml`): образ `ghcr.io/darkil1ght/m094diploma` собирается под `linux/arm64`
-(кэш слоёв GitHub Actions) и пушится в GHCR; по SSH на сервер копируются `compose.yml` и скрипты `deploy/`,
-затем `deploy/deploy.sh <тег>`: `docker compose pull`, `up -d --wait` — ждёт healthy у db и app (healthcheck образа),
-иначе печатает логи app и роняет задание. Перед prod `deploy.sh --backup` сначала делает копию базы `deploy/backup.sh`
-(в `~/m094diploma-backups`). Наружу compose ничего не публикует: app подключён к сети общего Caddy (`CADDY_NETWORK`)
-под именем `APP_ALIAS`, база — только к своей сети проекта. Миграции базы встанут в `deploy.sh` с S-03 (там TODO).
+(кэш слоёв GitHub Actions) и пушится в GHCR с неизменяемым тегом; по SSH на сервер копируются `compose.yml` и скрипты
+`deploy/`, затем `deploy/deploy.sh <тег>`: `docker compose pull`, `up -d --wait` — ждёт healthy у db и app (healthcheck
+образа). Не поднялось — печатает логи, возвращает версию, которая работала до этого, и роняет задание. Только после
+healthy CI переставляет на образ тег `main` (staging) или `latest` (prod). Перед prod `deploy.sh --backup` делает копию
+базы `deploy/backup.sh` (в `~/m094diploma-backups`, имя с датой и временем). Наружу compose ничего не публикует: сервис
+`m094-app` подключён к сети общего Caddy (`CADDY_NETWORK`) под именем `<каталог>-app` (`APP_ALIAS` задаёт `deploy.sh`),
+база — только к своей сети проекта. Имя `m094-app` в сети Caddy общее у staging и prod — в Caddy его не использовать.
+Поднимать окружение только через `deploy.sh`: голый `docker compose up` оставит app без своего имени в сети Caddy.
+Миграции базы встанут в `deploy.sh` с S-03 (там TODO).
 
 Выкатить prod: `git tag v1.2.0 <коммит main> && git push origin v1.2.0` — когда CI на этом коммите уже зелёный.
 
@@ -109,8 +113,7 @@ CI `.env` не читает и не перезаписывает: при вык�
 1. GitHub Secrets `SSH_HOST`, `SSH_USER`, `SSH_KEY`, `SSH_KNOWN_HOSTS` — см. «Секреты». Открытый ключ CI — в `~/.ssh/authorized_keys`.
 2. Settings → Environments → `production`: Required reviewers — Дархан (ручное подтверждение выкатки prod),
    Deployment branches and tags — только теги `v*`. `staging` создаётся сам при первой выкатке.
-3. На сервере — каталоги и `.env` для обоих окружений (`.env` по «Секретам», `APP_ALIAS` у каждого свой,
-   в staging `IMAGE_TAG=main`, в prod `IMAGE_TAG=latest`; `CADDY_NETWORK` — имя сети Caddy из `docker network ls`):
+3. На сервере — каталоги и `.env` для обоих окружений (`.env` по «Секретам»; в staging `IMAGE_TAG=main`, в prod `IMAGE_TAG=latest`; `CADDY_NETWORK` — имя сети Caddy из `docker network ls`):
    `mkdir -p ~/m094diploma/deploy ~/m094diploma-staging/deploy`.
 4. Пакет GHCR сделать публичным после первой сборки (Packages → m094diploma → Package settings → Change visibility → Public):
    репо открытый, а серверу так не нужен `docker login`. Иначе — `docker login ghcr.io` на сервере с токеном `read:packages`.

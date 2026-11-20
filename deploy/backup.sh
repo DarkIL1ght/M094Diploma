@@ -10,7 +10,7 @@ env_file="${ENV_FILE:-.env}"
 dir="${BACKUP_DIR:-$HOME/m094diploma-backups}"
 keep="${KEEP_DAYS:-14}"
 mkdir -p "$dir"
-out="$dir/m094-$(date +%F).dump"
+out="$dir/m094-$(date +%F-%H%M%S).dump"  # со временем: копия перед выкаткой не затрёт дневную
 # Пишем во временный файл: оборванный дамп не должен выглядеть как готовая копия.
 docker compose -f "$compose_file" --env-file "$env_file" exec -T db \
 	sh -c 'pg_dump -U "$POSTGRES_USER" --format=custom "$POSTGRES_DB"' >"$out.tmp"

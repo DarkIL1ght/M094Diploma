@@ -12,11 +12,6 @@ on:
   push:
     tags: ["v*"]
 
-# Выкатки одного окружения идут по очереди, начатую не обрываем: сервер не должен остаться на полпути.
-concurrency:
-  group: deploy-${{ github.event_name == 'push' && 'production' || 'staging' }}
-  cancel-in-progress: false
-
 permissions:
   contents: read
 
@@ -31,6 +26,9 @@ jobs:
       github.event_name == 'push' ||
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
+    concurrency:
+      group: image-${{ github.event_name == 'push' && 'production' || 'staging' }}
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -40,6 +38,7 @@ jobs:
       tag: ${{ steps.meta.outputs.tag }}
       environment: ${{ steps.meta.outputs.environment }}
       dir: ${{ steps.meta.outputs.dir }}
+      moving: ${{ steps.meta.outputs.moving }}
     steps:
       - name: Что выкатываем
         id: meta
@@ -59,7 +58,7 @@ jobs:
             echo "tag=$tag"
             echo "environment=$environment"
             echo "dir=$dir"
-            echo "tags=$IMAGE:$tag,$IMAGE:$moving"
+            echo "moving=$moving"
           } >>"$GITHUB_OUTPUT"
       - name: CI на коммите тега зелёный
         if: github.event_name == 'push'
@@ -67,24 +66,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ steps.meta.outputs.sha }}
         run: |
-          ok=$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$SHA" --status success --json databaseId --jq length)
-          [ "$ok" -gt 0 ] || { echo "на $SHA нет зелёного CI: тег ставят на коммит main, когда CI на нём прошёл" >&2; exit 1; }
-      - uses: actions/checkout@v4
+          ok=$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --event push --branch main             --commit "$SHA" --status success --json databaseId --jq length)
+          [ "$ok" -gt 0 ] || { echo "на $SHA нет зелёного CI пуша в main: тег ставят на коммит main после CI" >&2; exit 1; }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           ref: ${{ steps.meta.outputs.sha }}
       # QEMU не нужен: Dockerfile собирает Go на платформе runner'а под TARGETARCH, в arm64-слое нет RUN.
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - uses: docker/build-push-action@v6
+      # Здесь только неизменяемый тег; main/latest переставляет задание deploy после healthy.
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
         with:
           context: .  # каталог с checkout нужного коммита; без него buildx взял бы git-контекст GITHUB_SHA
           platforms: linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.meta.outputs.sha }}
@@ -97,12 +97,19 @@ jobs:
     runs-on: ubuntu-latest
     # production — GitHub Environment: в настройках репо на нём можно включить ручное подтверждение выкатки
     environment: ${{ needs.image.outputs.environment }}
+    # Выкатки одного окружения идут по очереди, начатую не обрываем: сервер не должен остаться на полпути.
+    concurrency:
+      group: deploy-${{ needs.image.outputs.environment }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write  # перестановка тега main/latest
     env:
       ENVIRONMENT: ${{ needs.image.outputs.environment }}
       DIR: ${{ needs.image.outputs.dir }}  # относительно домашнего каталога SSH_USER
       TAG: ${{ needs.image.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           ref: ${{ needs.image.outputs.sha }}
           sparse-checkout: deploy
@@ -136,9 +143,19 @@ jobs:
       # TODO S-03: применить миграции. Их запуск встанет в deploy/deploy.sh между подъёмом db и app
       # (там же закомментированный пример), чтобы ручной откат шёл тем же путём. Отдельный шаг здесь, если понадобится:
       # - name: Миграции
-      #   run: ssh server "cd '$DIR' && IMAGE_TAG='$TAG' docker compose run --rm app migrate up"
+      #   run: ssh server "cd '$DIR' && IMAGE_TAG='$TAG' docker compose run --rm m094-app migrate up"
       - name: Выкатка и ожидание healthy
         run: |
           backup=
           if [ "$ENVIRONMENT" = production ]; then backup=--backup; fi
           ssh server "'$DIR/deploy/deploy.sh' $backup '$TAG'"
+      # main/latest показывают на то, что реально работает: переставляем только после healthy.
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Тег ${{ needs.image.outputs.moving }} на выкаченный образ
+        env:
+          MOVING: ${{ needs.image.outputs.moving }}
+        run: docker buildx imagetools create --tag "$IMAGE:$MOVING" "$IMAGE:$TAG"
