@@ -36,10 +36,13 @@ if [ "$backup" = yes ]; then
 		echo "база ещё не запущена — копию пропускаю"
 	fi
 fi
-# TODO S-03: применить миграции до запуска новой версии app, когда в образе появится способ (goose), например:
-#   compose up -d --wait db
-#   compose run --rm m094-app migrate up
+# Миграции (S-03) — новым образом до запуска новой версии app. Не применились — выкатку не начинаем.
 # Возврат прежней версии ниже схему базы не откатывает: миграции должны быть совместимы с предыдущей версией app.
+compose up -d --wait db
+if ! compose run --rm --no-deps m094-app migrate up; then
+	echo "миграции для $tag не применились — выкатку не начинаю" >&2
+	exit 1
+fi
 if ! compose up -d --wait --wait-timeout 180 --remove-orphans; then
 	compose ps
 	compose logs --no-color --tail=100 m094-app

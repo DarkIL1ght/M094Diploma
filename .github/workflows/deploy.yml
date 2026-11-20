@@ -140,10 +140,7 @@ jobs:
           scp deploy/compose.yml "server:$DIR/compose.yml"
           scp deploy/deploy.sh deploy/backup.sh deploy/restore-check.sh "server:$DIR/deploy/"
           ssh server "chmod +x '$DIR'/deploy/*.sh"
-      # TODO S-03: применить миграции. Их запуск встанет в deploy/deploy.sh между подъёмом db и app
-      # (там же закомментированный пример), чтобы ручной откат шёл тем же путём. Отдельный шаг здесь, если понадобится:
-      # - name: Миграции
-      #   run: ssh server "cd '$DIR' && IMAGE_TAG='$TAG' docker compose run --rm m094-app migrate up"
+      # Миграции (S-03) применяет deploy/deploy.sh перед запуском app, чтобы ручной откат шёл тем же путём.
       - name: Выкатка и ожидание healthy
         run: |
           backup=
