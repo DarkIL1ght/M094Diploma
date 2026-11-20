@@ -40,6 +40,8 @@ create table test_attempts (
 -- nulls not distinct — у режимов mistakes и mixed темы нет, и NULL должен считаться одинаковым.
 create unique index test_attempts_one_active_idx on test_attempts (session_id, mode, topic_id) nulls not distinct
     where status = 'active';
+-- внешний ключ на сессию (каскад при очистке) и тесты пользователя от новых к старым
+create index test_attempts_session_started_idx on test_attempts (session_id, started_at desc);
 create index test_attempts_topic_id_idx on test_attempts (topic_id);
 
 -- Вопросы теста в порядке показа и выбранные ответы. Вопрос из истории тестов удалить нельзя (restrict).
@@ -49,7 +51,7 @@ create table test_questions (
     question_id bigint   not null references questions on delete restrict,
     -- ext_id выбранных вариантов; пустой массив — ответа нет
     selected    text[]   not null default '{}',
-    -- заполняется при завершении теста
+    -- итог по вопросу: null, пока тест идёт; при завершении true или false (без ответа — false)
     is_correct  boolean,
     primary key (attempt_id, position),
     unique (attempt_id, question_id)

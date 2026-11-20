@@ -1,5 +1,6 @@
 -- S-03. Учебный контент: темы, разделы (уроки), вопросы с вариантами и общий материал к группам вопросов.
 -- Пишет только загрузчик (S-05): upsert по ext_id, строку обновляет, только если изменился sum_hash.
+-- Пропавшее из источника не удаляется, а выводится из оборота (retired_at): на него ссылается история попыток.
 -- Внутренние ключи — bigint: на них ссылается прогресс пользователей. Наружу (API) отдаётся ext_id.
 -- Каталоги предметов, достижений и косметики — в коде и content/*.json, в базе только их коды.
 
@@ -8,12 +9,13 @@ create domain subject_code as text
     check (value in ('english', 'tgo', 'algorithms', 'databases'));
 
 create table topics (
-    id       bigint       generated always as identity primary key,
-    ext_id   text         not null unique,
-    subject  subject_code not null,
-    title    text         not null,
-    position integer      not null check (position >= 1),
-    sum_hash text         not null,
+    id         bigint       generated always as identity primary key,
+    ext_id     text         not null unique,
+    subject    subject_code not null,
+    title      text         not null,
+    position   integer      not null check (position >= 1),
+    sum_hash   text         not null,
+    retired_at timestamptz,
     -- цель составного внешнего ключа: предмет вопроса совпадает с предметом его темы
     unique (id, subject)
 );
@@ -22,13 +24,14 @@ create table topics (
 create index topics_subject_position_idx on topics (subject, position);
 
 create table sections (
-    id       bigint  generated always as identity primary key,
-    ext_id   text    not null unique,
-    topic_id bigint  not null references topics on delete restrict,
-    title    text    not null,
-    position integer not null check (position >= 1),
-    body_md  text    not null,
-    sum_hash text    not null
+    id         bigint  generated always as identity primary key,
+    ext_id     text    not null unique,
+    topic_id   bigint  not null references topics on delete restrict,
+    title      text    not null,
+    position   integer not null check (position >= 1),
+    body_md    text    not null,
+    sum_hash   text    not null,
+    retired_at timestamptz
 );
 
 -- разделы темы по порядку: оглавление, соседние разделы
@@ -60,6 +63,8 @@ create table questions (
     listen_text        text,
     listen_lang        text,
     sum_hash           text         not null,
+    -- выведен из оборота: в новые тесты и варианты КТ не попадает, в истории и разборах остаётся
+    retired_at         timestamptz,
     -- цель составного ключа из kt_tasks: блок КТ совпадает с предметом вопроса
     unique (id, subject),
     foreign key (topic_id, subject) references topics (id, subject) on delete restrict,
@@ -67,9 +72,10 @@ create table questions (
     check ((listen_text is null) = (listen_lang is null))
 );
 
--- подбор вопросов теста по теме и смешанного теста по предметам
+-- тест по теме (и внешний ключ на тему); выведенные отсекаются фильтром — в теме их единицы
 create index questions_topic_id_idx on questions (topic_id);
-create index questions_subject_idx on questions (subject);
+-- смешанный тест и вариант КТ: действующие вопросы предмета
+create index questions_subject_active_idx on questions (subject) where retired_at is null;
 create index questions_shared_material_id_idx on questions (shared_material_id);
 create index questions_section_id_idx on questions (section_id);
 

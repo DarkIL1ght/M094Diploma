@@ -14,8 +14,9 @@ create table plan_tasks (
     ref_id     text,
     done_at    timestamptz,
     check (ref_id is null or ref_type is not null),
-    -- план по дням (GET /api/plan) идёт по этому индексу
-    unique (session_id, day, position)
+    -- план по дням (GET /api/plan) идёт по этому индексу; проверка в конце транзакции, чтобы пересчёт плана
+    -- мог переставлять задачи без временных номеров
+    unique (session_id, day, position) deferrable initially deferred
 );
 
 -- +goose Down

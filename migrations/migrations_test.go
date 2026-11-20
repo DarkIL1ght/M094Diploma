@@ -138,6 +138,41 @@ func sources(t *testing.T) []string {
 	return out
 }
 
+// У каждого внешнего ключа есть индекс, который начинается с его первой колонки: без него каскад при удалении
+// сессии и проверка restrict читают таблицу целиком. Частичный индекс не считается.
+func TestForeignKeysIndexed(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	p, err := NewProvider(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Up(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := db.QueryContext(ctx, `select c.conrelid::regclass::text || '.' || a.attname
+		from pg_constraint c
+		join pg_attribute a on a.attrelid = c.conrelid and a.attnum = c.conkey[1]
+		where c.contype = 'f' and c.connamespace = current_schema()::regnamespace
+		  and not exists (select 1 from pg_index i
+		                  where i.indrelid = c.conrelid and i.indkey[0] = c.conkey[1] and i.indpred is null)
+		order by 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var fk string
+		if err := rows.Scan(&fk); err != nil {
+			t.Fatal(err)
+		}
+		t.Errorf("внешний ключ без индекса: %s", fk)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Ограничения, на которые полагаются сценарии: без них ошибку в коде поймали бы только данные в проде.
 func TestConstraints(t *testing.T) {
 	db := testDB(t)
@@ -192,6 +227,11 @@ func TestConstraints(t *testing.T) {
 	mustFail("вторая незавершённая попытка КТ",
 		`insert into kt_attempts (session_id, track, started_at, deadline_at, max_points)
 		 values ('s1', 'profile', now(), now() + interval '100 minutes', 70)`)
+
+	// пересчёт плана переставляет задачи одним запросом: уникальность проверяется в конце транзакции
+	must(`insert into plan_tasks (session_id, day, position, kind, title)
+		values ('s1', '2027-01-10', 1, 'lesson', 'Урок'), ('s1', '2027-01-10', 2, 'test', 'Тест')`)
+	must(`update plan_tasks set position = 3 - position`)
 
 	// удаление сессии уносит всё, что ей принадлежит
 	must(`delete from sessions where id = 's1'`)

@@ -87,8 +87,8 @@ create table notifications (
     check (type <> 'cosmetic_unlocked' or cosmetic_id is not null)
 );
 
--- непрочитанные события сессии по порядку появления
-create index notifications_unseen_idx on notifications (session_id, created_at) where seen_at is null;
+-- внешний ключ на сессию и события сессии по порядку появления (непоказанные — фильтром по seen_at)
+create index notifications_session_created_idx on notifications (session_id, created_at);
 
 -- +goose Down
 drop table notifications;
