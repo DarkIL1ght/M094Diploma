@@ -52,18 +52,10 @@ function appearanceSettings() {
       </select>
     </label>
     <label>Акцент
-      <select name="accent" data-appearance>
-        <option value="none">Без акцента</option>
-        <option value="red">Красный</option>
-        <option value="orange">Оранжевый</option>
-        <option value="amber">Янтарный</option>
-        <option value="green">Зелёный</option>
-        <option value="teal">Бирюзовый</option>
-        <option value="blue">Синий</option>
-        <option value="violet">Фиолетовый</option>
-        <option value="pink">Розовый</option>
-      </select>
+      <select name="accent" data-appearance></select>
     </label>`;
+
+  settings.querySelector('select[name="accent"]').append(document.getElementById('accent-options').content.cloneNode(true));
 
   for (const control of settings.querySelectorAll('select')) {
     const value = document.documentElement.dataset[control.name];

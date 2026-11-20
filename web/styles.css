@@ -21,14 +21,14 @@
 :root[data-theme='light'] { color-scheme: light; }
 :root[data-theme='dark'] { color-scheme: dark; }
 
-:root[data-accent='red'] { --accent: var(--color-accent-red); --accent-subtle: var(--color-accent-red-subtle); }
-:root[data-accent='orange'] { --accent: var(--color-accent-orange); --accent-subtle: var(--color-accent-orange-subtle); }
-:root[data-accent='amber'] { --accent: var(--color-accent-amber); --accent-subtle: var(--color-accent-amber-subtle); }
-:root[data-accent='green'] { --accent: var(--color-accent-green); --accent-subtle: var(--color-accent-green-subtle); }
-:root[data-accent='teal'] { --accent: var(--color-accent-teal); --accent-subtle: var(--color-accent-teal-subtle); }
-:root[data-accent='blue'] { --accent: var(--color-accent-blue); --accent-subtle: var(--color-accent-blue-subtle); }
-:root[data-accent='violet'] { --accent: var(--color-accent-violet); --accent-subtle: var(--color-accent-violet-subtle); }
-:root[data-accent='pink'] { --accent: var(--color-accent-pink); --accent-subtle: var(--color-accent-pink-subtle); }
+:root[data-accent-color='red'] { --accent: var(--color-accent-red); --accent-subtle: var(--color-accent-red-subtle); }
+:root[data-accent-color='orange'] { --accent: var(--color-accent-orange); --accent-subtle: var(--color-accent-orange-subtle); }
+:root[data-accent-color='amber'] { --accent: var(--color-accent-amber); --accent-subtle: var(--color-accent-amber-subtle); }
+:root[data-accent-color='green'] { --accent: var(--color-accent-green); --accent-subtle: var(--color-accent-green-subtle); }
+:root[data-accent-color='teal'] { --accent: var(--color-accent-teal); --accent-subtle: var(--color-accent-teal-subtle); }
+:root[data-accent-color='blue'] { --accent: var(--color-accent-blue); --accent-subtle: var(--color-accent-blue-subtle); }
+:root[data-accent-color='violet'] { --accent: var(--color-accent-violet); --accent-subtle: var(--color-accent-violet-subtle); }
+:root[data-accent-color='pink'] { --accent: var(--color-accent-pink); --accent-subtle: var(--color-accent-pink-subtle); }
 
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
