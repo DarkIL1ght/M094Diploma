@@ -1,6 +1,6 @@
 # S-02. Команды разработки. Нужны Docker с compose v2 и make
 # (Windows: make из Git for Windows SDK, `winget install ezwinports.make` или WSL).
-.PHONY: help up down reset logs ps psql test lint fmt run build
+.PHONY: help up down reset logs ps psql test lint fmt run build migrate-up migrate-down migrate-status
 
 DB_PORT ?= 5433
 DB_URL  := postgres://m094:m094@localhost:$(DB_PORT)/m094?sslmode=disable
@@ -10,7 +10,7 @@ PROFILES := $(if $(wildcard Dockerfile),--profile app) $(if $(wildcard api/opena
 COMPOSE  := docker compose $(PROFILES)
 
 help: ## список команд
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-6s %s\n", $$1, $$2}'
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-14s %s\n", $$1, $$2}'
 
 up: ## поднять всё: база, приложение (если есть), мок API (если есть)
 	$(COMPOSE) up -d --build --wait
@@ -35,6 +35,15 @@ psql: ## консоль базы
 
 test: ## Go-тесты с локальной базой (make up до этого)
 	TEST_DATABASE_URL='$(DB_URL)' go test -race -count=1 ./...
+
+migrate-up: ## применить новые миграции к локальной базе (make up до этого)
+	DATABASE_URL='$(DB_URL)' go run ./cmd/server migrate up
+
+migrate-down: ## откатить последнюю миграцию
+	DATABASE_URL='$(DB_URL)' go run ./cmd/server migrate down
+
+migrate-status: ## какие миграции применены
+	DATABASE_URL='$(DB_URL)' go run ./cmd/server migrate status
 
 run: ## сервер на :8080 без Docker (логи для чтения глазами)
 	LOG_FORMAT=text go run ./cmd/server

@@ -2,10 +2,12 @@
 //
 //	server              запустить сервер (настройки — переменные окружения, см. internal/config)
 //	server healthcheck  проверить, что запущенный сервер отвечает на /healthz (для HEALTHCHECK в Docker)
+//	server migrate up|down|status  миграции схемы базы из DATABASE_URL: применить новые, откатить последнюю, показать
 package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -33,14 +35,30 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		return 2
 	}
 	if len(args) > 0 {
-		if args[0] == "healthcheck" {
+		switch args[0] {
+		case "healthcheck":
 			if err := httpapi.CheckHealth(cfg.Addr); err != nil {
 				fmt.Fprintf(stderr, "healthcheck: %v\n", err)
 				return 1
 			}
 			return 0
+		case "migrate":
+			if cfg.DatabaseURL == "" {
+				fmt.Fprintln(stderr, "migrate: задайте DATABASE_URL")
+				return 2
+			}
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			if err := migrate(ctx, cfg.DatabaseURL, args[1:], stdout); err != nil {
+				fmt.Fprintln(stderr, err)
+				if errors.Is(err, errMigrateUsage) {
+					return 2
+				}
+				return 1
+			}
+			return 0
 		}
-		fmt.Fprintf(stderr, "неизвестная команда %q (есть только healthcheck)\n", args[0])
+		fmt.Fprintf(stderr, "неизвестная команда %q (есть healthcheck и migrate)\n", args[0])
 		return 2
 	}
 

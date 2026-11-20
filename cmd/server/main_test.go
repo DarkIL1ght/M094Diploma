@@ -41,3 +41,24 @@ func TestRunFailsWhenAddressBusy(t *testing.T) {
 		t.Fatalf("код %d, лог %q", code, out.String())
 	}
 }
+
+func TestMigrateNeedsDatabaseAndKnownAction(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"migrate", "up"}, func(string) string { return "" }, &out, &errb); code != 2 ||
+		!strings.Contains(errb.String(), "DATABASE_URL") {
+		t.Fatalf("без DATABASE_URL: код %d, stderr %q", code, errb.String())
+	}
+	errb.Reset()
+	env := func(k string) string {
+		if k == "DATABASE_URL" {
+			return "postgres://localhost:1/none"
+		}
+		return ""
+	}
+	for _, args := range [][]string{{"migrate"}, {"migrate", "sideways"}, {"migrate", "up", "extra"}} {
+		if code := run(args, env, &out, &errb); code != 2 || !strings.Contains(errb.String(), "up, down или status") {
+			t.Fatalf("%v: код %d, stderr %q", args, code, errb.String())
+		}
+		errb.Reset()
+	}
+}
