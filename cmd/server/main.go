@@ -18,6 +18,7 @@ import (
 
 	"github.com/DarkIL1ght/M094Diploma/internal/adapters/httpapi"
 	"github.com/DarkIL1ght/M094Diploma/internal/adapters/memstore"
+	"github.com/DarkIL1ght/M094Diploma/internal/adapters/postgres"
 	"github.com/DarkIL1ght/M094Diploma/internal/app/session"
 	"github.com/DarkIL1ght/M094Diploma/internal/config"
 	"github.com/DarkIL1ght/M094Diploma/internal/logging"
@@ -66,6 +67,25 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Хранилище: Postgres, если задан DATABASE_URL, иначе память процесса (make run, тесты, CI без базы).
+	var store session.Store
+	if cfg.DatabaseURL != "" {
+		pool, err := postgres.Open(ctx, cfg.DatabaseURL)
+		if err != nil {
+			log.Error("не удалось подключиться к базе", "error", err)
+			return 1
+		}
+		defer pool.Close()
+		if err := checkSchema(ctx, pool); err != nil {
+			log.Error("сервер не запущен", "error", err)
+			return 1
+		}
+		store = postgres.NewSessionStore(pool)
+	} else {
+		log.Warn("DATABASE_URL не задан: сессии хранятся в памяти процесса и пропадут после перезапуска")
+		store = memstore.New()
+	}
+
 	ln, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
 		log.Error("не удалось занять адрес", "addr", cfg.Addr, "error", err)
@@ -73,10 +93,8 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 	}
 	log.Info("сервер запущен", "listen", ln.Addr().String(), "config", cfg)
 
-	// Хранилище в Postgres появится в B-04; до этого сессии живут в памяти и пропадают при перезапуске.
-	log.Warn("сессии хранятся в памяти процесса: после перезапуска сервера они пропадут")
-	sessions := session.New(memstore.New())
-	// Хранилище в памяти растёт само (каждый вход без cookie создаёт сессию): раз в час чистим брошенное.
+	sessions := session.New(store)
+	// Раз в час удаляем просроченное и пустые сессии (каждый вход без cookie создаёт сессию).
 	go sessions.RunCleanup(ctx, time.Hour, func(deleted int, err error) {
 		if err != nil {
 			log.Error("очистка сессий не удалась", "error", err)

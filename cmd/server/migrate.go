@@ -7,7 +7,8 @@ import (
 	"fmt"
 	"io"
 
-	_ "github.com/jackc/pgx/v5/stdlib" // драйвер pgx для database/sql
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib" // драйвер pgx для database/sql
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/lock"
 
@@ -65,4 +66,28 @@ func migrate(ctx context.Context, dsn string, args []string, stdout io.Writer) e
 		}
 		return err
 	}
+}
+
+// checkSchema проверяет при старте сервера, что в базе применены все миграции из бинарника. Сам сервер миграции
+// не применяет: на сервере это делает выкатка (deploy/deploy.sh), локально — `make up` и `make migrate-up`.
+// Со старой схемой запросы падали бы посреди работы, поэтому лучше не стартовать и сказать, что сделать.
+func checkSchema(ctx context.Context, pool *pgxpool.Pool) error {
+	db := stdlib.OpenDBFromPool(pool) // закрытие *sql.DB пул не закрывает
+	defer db.Close()
+	p, err := migrations.NewProvider(db)
+	if err != nil {
+		return err
+	}
+	pending, err := p.HasPending(ctx)
+	if err != nil {
+		return fmt.Errorf("проверка схемы базы: %w", err)
+	}
+	if pending {
+		current, target, err := p.GetVersions(ctx)
+		if err != nil {
+			return fmt.Errorf("проверка схемы базы: %w", err)
+		}
+		return fmt.Errorf("схема базы устарела (версия %d, нужна %d): выполните `server migrate up` (локально `make migrate-up`)", current, target)
+	}
+	return nil
 }
