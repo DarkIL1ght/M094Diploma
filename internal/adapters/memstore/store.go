@@ -12,6 +12,7 @@ import (
 
 type tokenRec struct {
 	sessionID string
+	createdAt time.Time
 	lastSeen  time.Time
 }
 
@@ -22,7 +23,6 @@ type Store struct {
 	tokens   map[session.TokenHash]tokenRec
 	keys     map[session.KeyHash]string // хэш ключа → id сессии
 	keyOf    map[string]session.KeyHash // id сессии → её действующий хэш ключа
-	hasKey   map[string]bool
 }
 
 // New создаёт пустое хранилище.
@@ -42,7 +42,7 @@ func (m *Store) CreateSession(_ context.Context, s session.Session, token sessio
 	defer m.mu.Unlock()
 	cp := s
 	m.sessions[s.ID] = &cp
-	m.tokens[token] = tokenRec{sessionID: s.ID, lastSeen: s.CreatedAt}
+	m.tokens[token] = tokenRec{sessionID: s.ID, createdAt: s.CreatedAt, lastSeen: s.CreatedAt}
 	return nil
 }
 
@@ -64,7 +64,7 @@ func (m *Store) AddToken(_ context.Context, sessionID string, token session.Toke
 	if _, ok := m.sessions[sessionID]; !ok {
 		return session.ErrNotFound
 	}
-	m.tokens[token] = tokenRec{sessionID: sessionID, lastSeen: now}
+	m.tokens[token] = tokenRec{sessionID: sessionID, createdAt: now, lastSeen: now}
 	return nil
 }
 
@@ -123,9 +123,35 @@ func (m *Store) DeleteExpired(_ context.Context, before time.Time) (int, error) 
 		if alive[id] {
 			continue
 		}
-		if k, ok := m.keyOf[id]; ok {
-			delete(m.keys, k)
-			delete(m.keyOf, id)
+		if _, hasKey := m.keyOf[id]; hasKey {
+			continue // сессия с ключом остаётся: по ключу можно вернуться в любой момент
+		}
+		delete(m.sessions, id)
+		deleted++
+	}
+	return deleted, nil
+}
+
+// DeleteUnused удаляет пустые сессии. Прогресса и настройки onboarded в этом хранилище нет, поэтому пустая — это
+// сессия без ключа, ни одним токеном которой не пользовались после выдачи.
+func (m *Store) DeleteUnused(_ context.Context, createdBefore time.Time) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	used := map[string]bool{}
+	for _, rec := range m.tokens {
+		if !rec.lastSeen.Equal(rec.createdAt) {
+			used[rec.sessionID] = true
+		}
+	}
+	deleted := 0
+	for id, s := range m.sessions {
+		if _, hasKey := m.keyOf[id]; hasKey || used[id] || !s.CreatedAt.Before(createdBefore) {
+			continue
+		}
+		for h, rec := range m.tokens {
+			if rec.sessionID == id {
+				delete(m.tokens, h)
+			}
 		}
 		delete(m.sessions, id)
 		deleted++

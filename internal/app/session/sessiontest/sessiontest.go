@@ -101,36 +101,76 @@ func Run(t *testing.T, newStore func(t *testing.T) session.Store) {
 
 	t.Run("очистка просроченных", func(t *testing.T) {
 		st := newStore(t)
-		old, fresh := session.HashToken("old"), session.HashToken("fresh")
-		// s1: единственный токен просрочен; s2: просрочен один из двух; s3: свежий токен
-		_ = st.CreateSession(ctx, mk("s1"), old)
+		// s1: единственный токен просрочен, но есть ключ; s2: просрочен один из двух; s3: свежий токен;
+		// s4: единственный токен просрочен, ключа нет
+		_ = st.CreateSession(ctx, mk("s1"), session.HashToken("s1-old"))
 		k1, _ := session.HashKey("0000-0000-0000-0001")
 		_ = st.SetRecoveryKey(ctx, "s1", k1, t0)
 		_ = st.CreateSession(ctx, mk("s2"), session.HashToken("s2-old"))
 		_ = st.AddToken(ctx, "s2", session.HashToken("s2-new"), t0.Add(48*time.Hour))
+		fresh := session.HashToken("fresh")
 		_ = st.CreateSession(ctx, mk("s3"), fresh)
 		_ = st.TouchToken(ctx, fresh, t0.Add(48*time.Hour))
+		_ = st.CreateSession(ctx, mk("s4"), session.HashToken("s4-old"))
 
 		n, err := st.DeleteExpired(ctx, t0.Add(24*time.Hour))
 		if err != nil || n != 1 {
-			t.Fatalf("должна удалиться одна сессия (s1), получили %d, %v", n, err)
+			t.Fatalf("должна удалиться одна сессия (s4), получили %d, %v", n, err)
 		}
-		if _, err := st.SessionByToken(ctx, old); !errors.Is(err, session.ErrNotFound) {
-			t.Fatalf("просроченный токен должен исчезнуть: %v", err)
+		for _, tok := range []string{"s1-old", "s2-old", "s4-old"} {
+			if _, err := st.SessionByToken(ctx, session.HashToken(tok)); !errors.Is(err, session.ErrNotFound) {
+				t.Fatalf("просроченный токен %s должен исчезнуть: %v", tok, err)
+			}
 		}
-		if _, err := st.SessionByRecoveryKey(ctx, k1); !errors.Is(err, session.ErrNotFound) {
-			t.Fatalf("ключ удалённой сессии должен исчезнуть: %v", err)
+		if got, err := st.SessionByRecoveryKey(ctx, k1); err != nil || got.ID != "s1" {
+			t.Fatalf("сессия с ключом остаётся, ключ работает: %+v, %v", got, err)
+		}
+		if err := st.AddToken(ctx, "s1", session.HashToken("s1-new"), t0.Add(72*time.Hour)); err != nil {
+			t.Fatalf("к сессии с ключом можно подключить новый браузер: %v", err)
 		}
 		if got, err := st.SessionByToken(ctx, session.HashToken("s2-new")); err != nil || got.ID != "s2" {
 			t.Fatalf("сессия с одним живым токеном остаётся: %+v, %v", got, err)
 		}
-		if _, err := st.SessionByToken(ctx, session.HashToken("s2-old")); !errors.Is(err, session.ErrNotFound) {
-			t.Fatalf("просроченный токен живой сессии тоже удаляется: %v", err)
-		}
 		if _, err := st.SessionByToken(ctx, fresh); err != nil {
 			t.Fatalf("свежая сессия: %v", err)
 		}
+		if err := st.AddToken(ctx, "s4", session.HashToken("s4-new"), t0.Add(72*time.Hour)); !errors.Is(err, session.ErrNotFound) {
+			t.Fatalf("удалённой сессии больше нет: %v", err)
+		}
 		if n, err := st.DeleteExpired(ctx, t0.Add(24*time.Hour)); err != nil || n != 0 {
+			t.Fatalf("повторная очистка ничего не удаляет: %d, %v", n, err)
+		}
+	})
+
+	t.Run("очистка пустых", func(t *testing.T) {
+		st := newStore(t)
+		day := t0.Add(24 * time.Hour)
+		// empty: создана давно, токеном ни разу не пользовались, ключа нет — удаляется
+		_ = st.CreateSession(ctx, mk("empty"), session.HashToken("empty"))
+		// used: токеном пользовались после выдачи
+		_ = st.CreateSession(ctx, mk("used"), session.HashToken("used"))
+		_ = st.TouchToken(ctx, session.HashToken("used"), t0.Add(2*time.Hour))
+		// keyed: есть ключ восстановления
+		_ = st.CreateSession(ctx, mk("keyed"), session.HashToken("keyed"))
+		k, _ := session.HashKey("0000-0000-0000-0003")
+		_ = st.SetRecoveryKey(ctx, "keyed", k, t0)
+		// young: создана позже границы
+		young := session.Session{ID: "young", DisplayName: "Тихий Лис", CreatedAt: day.Add(time.Minute)}
+		_ = st.CreateSession(ctx, young, session.HashToken("young"))
+
+		n, err := st.DeleteUnused(ctx, day)
+		if err != nil || n != 1 {
+			t.Fatalf("должна удалиться одна пустая сессия, получили %d, %v", n, err)
+		}
+		if _, err := st.SessionByToken(ctx, session.HashToken("empty")); !errors.Is(err, session.ErrNotFound) {
+			t.Fatalf("пустая сессия и её токен удаляются: %v", err)
+		}
+		for _, tok := range []string{"used", "keyed", "young"} {
+			if got, err := st.SessionByToken(ctx, session.HashToken(tok)); err != nil || got.ID != tok {
+				t.Fatalf("сессия %s остаётся: %+v, %v", tok, got, err)
+			}
+		}
+		if n, err := st.DeleteUnused(ctx, day); err != nil || n != 0 {
 			t.Fatalf("повторная очистка ничего не удаляет: %d, %v", n, err)
 		}
 	})

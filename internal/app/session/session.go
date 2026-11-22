@@ -27,6 +27,9 @@ const (
 	DefaultTTL = 180 * 24 * time.Hour
 	// touchEvery — как часто обновлять «последний визит», чтобы не писать в базу на каждый запрос.
 	touchEvery = time.Hour
+	// UnusedTTL — сколько живёт пустая сессия (см. Store.DeleteUnused). Боты и проверки доступности ходят
+	// без cookie и каждый раз создают сессию, которой больше не пользуются: срок жизни токена для них слишком долгий.
+	UnusedTTL = 24 * time.Hour
 )
 
 // Session — анонимный пользователь.
@@ -54,9 +57,14 @@ type Store interface {
 	SetRecoveryKey(ctx context.Context, sessionID string, key KeyHash, issued time.Time) error
 	// SessionByRecoveryKey находит сессию по хэшу ключа; нет такого — ErrNotFound.
 	SessionByRecoveryKey(ctx context.Context, key KeyHash) (Session, error)
-	// DeleteExpired удаляет токены, не использованные с момента before, и сессии, у которых не осталось токенов
-	// (вместе с их ключами восстановления). Возвращает число удалённых сессий.
+	// DeleteExpired удаляет токены, не использованные с момента before, и сессии, у которых не осталось токенов.
+	// Сессии с ключом восстановления остаются: ключ действует бессрочно, пока его не заменят новым, и вернуться
+	// по нему можно хоть через год. Возвращает число удалённых сессий.
 	DeleteExpired(ctx context.Context, before time.Time) (int, error)
+	// DeleteUnused удаляет пустые сессии, созданные раньше createdBefore. Пустая — ключа нет, первый вход не пройден
+	// (onboarded), ни одним токеном не пользовались после выдачи и у пользователя нет данных прогресса
+	// (хранилище с базой проверяет таблицы прогресса). Возвращает число удалённых сессий.
+	DeleteUnused(ctx context.Context, createdBefore time.Time) (int, error)
 }
 
 // Service — сценарии работы с сессиями.
@@ -169,15 +177,25 @@ func (s *Service) Restore(ctx context.Context, key string) (Session, string, err
 		return Session{}, "", err
 	}
 	if err := s.store.AddToken(ctx, sess.ID, HashToken(token), s.now().UTC()); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			// очистка удалила сессию между поиском по ключу и привязкой токена: для клиента это неверный ключ
+			return Session{}, "", ErrInvalidKey
+		}
 		return Session{}, "", err
 	}
 	return sess, token, nil
 }
 
-// Cleanup удаляет просроченные токены и брошенные сессии: токен, которым не пользовались дольше срока жизни,
-// всё равно не пройдёт Resolve. Возвращает число удалённых сессий.
+// Cleanup удаляет просроченные токены и брошенные сессии (токен, которым не пользовались дольше срока жизни,
+// всё равно не пройдёт Resolve), а также пустые сессии старше UnusedTTL. Возвращает число удалённых сессий.
 func (s *Service) Cleanup(ctx context.Context) (int, error) {
-	return s.store.DeleteExpired(ctx, s.now().Add(-s.ttl).UTC())
+	now := s.now().UTC()
+	expired, err := s.store.DeleteExpired(ctx, now.Add(-s.ttl))
+	if err != nil {
+		return expired, err
+	}
+	unused, err := s.store.DeleteUnused(ctx, now.Add(-UnusedTTL))
+	return expired + unused, err
 }
 
 // RunCleanup вызывает Cleanup каждые every, пока ctx не отменён; итог каждого запуска передаётся в report.

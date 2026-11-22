@@ -196,32 +196,85 @@ func TestDisplayNamesVary(t *testing.T) {
 	}
 }
 
-func TestCleanupRemovesAbandonedSessionsOnly(t *testing.T) {
+func TestCleanupRemovesEmptySessionsAfterADay(t *testing.T) {
 	svc, st, c := newService(t)
 	ctx := context.Background()
-	_, abandoned, _ := svc.Start(ctx)
-	active, activeTok, _ := svc.Start(ctx)
+	_, emptyTok, _ := svc.Start(ctx)
+	used, usedTok, _ := svc.Start(ctx)
 
-	c.t = c.t.Add(session.DefaultTTL - time.Hour)
-	if _, err := svc.Resolve(ctx, activeTok); err != nil { // визит продлевает срок
+	c.t = c.t.Add(2 * time.Hour)
+	if _, err := svc.Resolve(ctx, usedTok); err != nil { // визит позже часа продлевает токен
 		t.Fatal(err)
 	}
+	c.t = c.t.Add(session.UnusedTTL - 3*time.Hour)
 	if n, err := svc.Cleanup(ctx); err != nil || n != 0 {
-		t.Fatalf("пока срок не вышел, удалять нечего: %d, %v", n, err)
+		t.Fatalf("сутки ещё не прошли, удалять нечего: %d, %v", n, err)
 	}
-	c.t = c.t.Add(2 * time.Hour) // брошенный токен вышел за срок, активный нет
-	n, err := svc.Cleanup(ctx)
-	if err != nil || n != 1 {
-		t.Fatalf("должна удалиться одна брошенная сессия: %d, %v", n, err)
+	c.t = c.t.Add(2 * time.Hour)
+	if n, err := svc.Cleanup(ctx); err != nil || n != 1 {
+		t.Fatalf("через сутки удаляется одна пустая сессия: %d, %v", n, err)
 	}
-	if _, err := svc.Resolve(ctx, abandoned); !errors.Is(err, session.ErrNotFound) {
-		t.Fatalf("брошенная сессия: %v", err)
+	if _, err := svc.Resolve(ctx, emptyTok); !errors.Is(err, session.ErrNotFound) {
+		t.Fatalf("пустая сессия: %v", err)
 	}
-	if got, err := svc.Resolve(ctx, activeTok); err != nil || got.ID != active.ID {
-		t.Fatalf("активная сессия должна остаться: %+v, %v", got, err)
+	if got, err := svc.Resolve(ctx, usedTok); err != nil || got.ID != used.ID {
+		t.Fatalf("сессия, которой пользовались, остаётся: %+v, %v", got, err)
 	}
 	if len(st.TokenHashes()) != 1 {
 		t.Fatalf("в хранилище должен остаться один токен, осталось %d", len(st.TokenHashes()))
+	}
+}
+
+func TestCleanupRemovesAbandonedSessionsButKeepsKeyedOnes(t *testing.T) {
+	svc, _, c := newService(t)
+	ctx := context.Background()
+	_, abandonedTok, _ := svc.Start(ctx)
+	keyed, keyedTok, _ := svc.Start(ctx)
+	key, _, err := svc.IssueRecoveryKey(ctx, keyed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.t = c.t.Add(2 * time.Hour)
+	for _, tok := range []string{abandonedTok, keyedTok} { // обеими пользовались, пустыми они не считаются
+		if _, err := svc.Resolve(ctx, tok); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	c.t = c.t.Add(session.DefaultTTL + time.Hour) // семь месяцев без визитов
+	n, err := svc.Cleanup(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("удаляется только брошенная сессия без ключа: %d, %v", n, err)
+	}
+	if _, err := svc.Resolve(ctx, abandonedTok); !errors.Is(err, session.ErrNotFound) {
+		t.Fatalf("брошенная сессия: %v", err)
+	}
+	if _, err := svc.Resolve(ctx, keyedTok); !errors.Is(err, session.ErrNotFound) {
+		t.Fatalf("старый токен сессии с ключом тоже истёк: %v", err)
+	}
+	got, _, err := svc.Restore(ctx, key)
+	if err != nil || got.ID != keyed.ID {
+		t.Fatalf("по ключу можно вернуться и через семь месяцев: %+v, %v", got, err)
+	}
+}
+
+// storeLosingSession имитирует очистку, удалившую сессию между SessionByRecoveryKey и AddToken.
+type storeLosingSession struct{ session.Store }
+
+func (storeLosingSession) AddToken(context.Context, string, session.TokenHash, time.Time) error {
+	return session.ErrNotFound
+}
+
+func TestRestoreRacingCleanupIsInvalidKeyNotInternalError(t *testing.T) {
+	st := memstore.New()
+	svc := session.New(st)
+	ctx := context.Background()
+	sess, _, _ := svc.Start(ctx)
+	key, _, _ := svc.IssueRecoveryKey(ctx, sess.ID)
+
+	racing := session.New(storeLosingSession{Store: st})
+	if _, _, err := racing.Restore(ctx, key); !errors.Is(err, session.ErrInvalidKey) {
+		t.Fatalf("ожидали ErrInvalidKey (клиент получит 404, а не 500), получили %v", err)
 	}
 }
 
