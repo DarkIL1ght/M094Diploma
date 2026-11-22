@@ -43,6 +43,11 @@ if ! compose run --rm --no-deps m094-app migrate up; then
 	echo "миграции для $tag не применились — выкатку не начинаю" >&2
 	exit 1
 fi
+# Контент (S-05) — из seed в образе, после миграций: одна транзакция, при ошибке база остаётся как была.
+if ! compose run --rm --no-deps m094-app seed; then
+	echo "контент для $tag не загрузился — выкатку не начинаю" >&2
+	exit 1
+fi
 if ! compose up -d --wait --wait-timeout 180 --remove-orphans; then
 	compose ps
 	compose logs --no-color --tail=100 m094-app

@@ -1,0 +1,48 @@
+[
+  {
+    "ext_id": "db-q-orders-having",
+    "topic": "db-select",
+    "kind": "single",
+    "text_md": "Сколько строк вернёт запрос к таблице `orders`?",
+    "code_lang": "sql",
+    "code_source": "select customer, sum(amount)\nfrom orders\ngroup by customer\nhaving sum(amount) > 1000;",
+    "shared_material": "db-mat-orders",
+    "explanation_md": "Суммы по клиентам: Алия — 1200, Бауыржан — 1500, Дана — `NULL` (сумма из одних `NULL`). Условию `> 1000` отвечают Алия и Бауыржан: две строки.",
+    "section": "db-select-where-group",
+    "options": [
+      {"ext_id": "a", "text_md": "1", "is_correct": false},
+      {"ext_id": "b", "text_md": "2", "is_correct": true},
+      {"ext_id": "c", "text_md": "3", "is_correct": false},
+      {"ext_id": "d", "text_md": "5", "is_correct": false}
+    ]
+  },
+  {
+    "ext_id": "db-q-orders-count",
+    "topic": "db-select",
+    "kind": "single",
+    "text_md": "Что вернёт `select count(amount) from orders;`?",
+    "shared_material": "db-mat-orders",
+    "explanation_md": "`COUNT(столбец)` пропускает `NULL`: у Даны сумма не указана, поэтому получится 4, а не 5.",
+    "section": "db-select-where-group",
+    "options": [
+      {"ext_id": "a", "text_md": "4", "is_correct": true},
+      {"ext_id": "b", "text_md": "5", "is_correct": false},
+      {"ext_id": "c", "text_md": "3", "is_correct": false},
+      {"ext_id": "d", "text_md": "`NULL`", "is_correct": false}
+    ]
+  },
+  {
+    "ext_id": "db-q-having-vs-where",
+    "topic": "db-select",
+    "kind": "multiple",
+    "text_md": "Какие утверждения верны? Выберите все подходящие.",
+    "explanation_md": "`WHERE` фильтрует строки до группировки и не видит агрегатов; `HAVING` фильтрует уже готовые группы и агрегаты использовать может. `ORDER BY` выполняется после `SELECT`.",
+    "section": "db-select-where-group",
+    "options": [
+      {"ext_id": "a", "text_md": "`WHERE` выполняется раньше `GROUP BY`", "is_correct": true},
+      {"ext_id": "b", "text_md": "В `HAVING` можно использовать `COUNT(*)`", "is_correct": true},
+      {"ext_id": "c", "text_md": "В `WHERE` можно использовать `SUM(amount)`", "is_correct": false},
+      {"ext_id": "d", "text_md": "`ORDER BY` выполняется раньше `SELECT`", "is_correct": false}
+    ]
+  }
+]

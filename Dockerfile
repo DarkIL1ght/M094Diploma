@@ -16,6 +16,9 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 # В итоговом образе нет оболочки и пакетов, только бинарник; запуск не от root.
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/server /server
+# seed для `server seed` в выкатке (S-05): путь по умолчанию content/seed — от рабочего каталога /
+COPY content/seed /content/seed
+WORKDIR /
 ENV ADDR=:8080
 EXPOSE 8080
 # healthcheck — подкоманда самого сервера: curl в образе нет
