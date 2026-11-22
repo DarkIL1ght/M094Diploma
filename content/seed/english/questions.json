@@ -1,0 +1,46 @@
+[
+  {
+    "ext_id": "en-q-ago",
+    "topic": "en-tenses",
+    "kind": "single",
+    "text_md": "Choose the correct option: *We ___ the new library two weeks ago.*",
+    "explanation_md": "*Two weeks ago* is a finished time in the past, so the Past Simple is needed: *We visited*.",
+    "section": "en-tenses-perfect-vs-past",
+    "options": [
+      {"ext_id": "a", "text_md": "have visited", "is_correct": false},
+      {"ext_id": "b", "text_md": "visited", "is_correct": true},
+      {"ext_id": "c", "text_md": "has visited", "is_correct": false},
+      {"ext_id": "d", "text_md": "are visiting", "is_correct": false}
+    ]
+  },
+  {
+    "ext_id": "en-q-since",
+    "topic": "en-tenses",
+    "kind": "single",
+    "text_md": "Choose the correct option: *My brother ___ in Almaty since he finished school.*",
+    "explanation_md": "*Since* shows a period that started in the past and continues now, so the Present Perfect is used: *has lived*.",
+    "section": "en-tenses-perfect-vs-past",
+    "options": [
+      {"ext_id": "a", "text_md": "lives", "is_correct": false},
+      {"ext_id": "b", "text_md": "lived", "is_correct": false},
+      {"ext_id": "c", "text_md": "has lived", "is_correct": true},
+      {"ext_id": "d", "text_md": "is living", "is_correct": false}
+    ]
+  },
+  {
+    "ext_id": "en-q-listen-yet",
+    "topic": "en-tenses",
+    "kind": "single",
+    "text_md": "Listen to the short dialogue. Has Marat finished his report?",
+    "listen_text": "Have you sent the report to the manager yet, Marat? Not yet. I have written the introduction, but I still need to check the figures.",
+    "listen_lang": "en-GB",
+    "explanation_md": "Marat says *Not yet* and that he still needs to check the figures, so the report is not finished.",
+    "section": "en-tenses-perfect-vs-past",
+    "options": [
+      {"ext_id": "a", "text_md": "Yes, he sent it this morning.", "is_correct": false},
+      {"ext_id": "b", "text_md": "No, he has only written the introduction.", "is_correct": true},
+      {"ext_id": "c", "text_md": "No, he has not started it.", "is_correct": false},
+      {"ext_id": "d", "text_md": "Yes, but the manager has not read it.", "is_correct": false}
+    ]
+  }
+]

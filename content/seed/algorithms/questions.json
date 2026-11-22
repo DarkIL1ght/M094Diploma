@@ -1,0 +1,62 @@
+[
+  {
+    "ext_id": "alg-q-nested-loops",
+    "topic": "alg-complexity",
+    "kind": "single",
+    "text_md": "Какова сложность фрагмента в худшем случае?",
+    "code_lang": "go",
+    "code_source": "for i := 0; i < n; i++ {\n\tfor j := 0; j < n; j++ {\n\t\tsum += a[i] * a[j]\n\t}\n}",
+    "explanation_md": "Внутренний цикл выполняется `n` раз на каждой из `n` итераций внешнего: всего `n · n` операций, то есть `O(n²)`.",
+    "section": "alg-complexity-big-o",
+    "options": [
+      {"ext_id": "a", "text_md": "`O(n)`", "is_correct": false},
+      {"ext_id": "b", "text_md": "`O(n log n)`", "is_correct": false},
+      {"ext_id": "c", "text_md": "`O(n²)`", "is_correct": true},
+      {"ext_id": "d", "text_md": "`O(2ⁿ)`", "is_correct": false}
+    ]
+  },
+  {
+    "ext_id": "alg-q-halving",
+    "topic": "alg-complexity",
+    "kind": "single",
+    "text_md": "Сколько раз выполнится тело цикла при `n = 64`?",
+    "code_lang": "go",
+    "code_source": "for k := n; k > 1; k /= 2 {\n\tsteps++\n}",
+    "explanation_md": "`k` принимает значения 64, 32, 16, 8, 4, 2 — шесть итераций, это `log₂ 64`. Такой цикл имеет сложность `O(log n)`.",
+    "section": "alg-complexity-big-o",
+    "options": [
+      {"ext_id": "a", "text_md": "6", "is_correct": true},
+      {"ext_id": "b", "text_md": "7", "is_correct": false},
+      {"ext_id": "c", "text_md": "32", "is_correct": false},
+      {"ext_id": "d", "text_md": "64", "is_correct": false}
+    ]
+  },
+  {
+    "ext_id": "alg-q-binary-search-precondition",
+    "topic": "alg-complexity",
+    "kind": "single",
+    "text_md": "Какое условие обязательно для бинарного поиска в массиве?",
+    "explanation_md": "Бинарный поиск отбрасывает половину массива по результату сравнения со средним элементом — это верно, только если элементы упорядочены.",
+    "section": "alg-complexity-search",
+    "options": [
+      {"ext_id": "a", "text_md": "Массив отсортирован", "is_correct": true},
+      {"ext_id": "b", "text_md": "В массиве нет повторов", "is_correct": false},
+      {"ext_id": "c", "text_md": "Длина массива — степень двойки", "is_correct": false},
+      {"ext_id": "d", "text_md": "Элементы — целые числа", "is_correct": false}
+    ]
+  },
+  {
+    "ext_id": "alg-q-drop-constants",
+    "topic": "alg-complexity",
+    "kind": "single",
+    "text_md": "Алгоритм делает `5n² + 3n + 40` операций. Как записать его сложность?",
+    "explanation_md": "В O-нотации остаётся только старшее слагаемое без коэффициента: `5n² + 3n + 40 = O(n²)`.",
+    "section": "alg-complexity-big-o",
+    "options": [
+      {"ext_id": "a", "text_md": "`O(5n²)`", "is_correct": false},
+      {"ext_id": "b", "text_md": "`O(n²)`", "is_correct": true},
+      {"ext_id": "c", "text_md": "`O(n² + n)`", "is_correct": false},
+      {"ext_id": "d", "text_md": "`O(n)`", "is_correct": false}
+    ]
+  }
+]

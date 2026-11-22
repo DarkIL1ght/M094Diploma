@@ -3,6 +3,7 @@
 //	server              запустить сервер (настройки — переменные окружения, см. internal/config)
 //	server healthcheck  проверить, что запущенный сервер отвечает на /healthz (для HEALTHCHECK в Docker)
 //	server migrate up|down|status  миграции схемы базы из DATABASE_URL: применить новые, откатить последнюю, показать
+//	server seed [каталог]  загрузить учебный контент из seed (по умолчанию content/seed, формат — docs/seed.md)
 package main
 
 import (
@@ -58,8 +59,23 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 				return 1
 			}
 			return 0
+		case "seed":
+			if cfg.DatabaseURL == "" {
+				fmt.Fprintln(stderr, "seed: задайте DATABASE_URL")
+				return 2
+			}
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			if err := runSeed(ctx, cfg.DatabaseURL, args[1:], stdout); err != nil {
+				fmt.Fprintln(stderr, err)
+				if errors.Is(err, errSeedUsage) {
+					return 2
+				}
+				return 1
+			}
+			return 0
 		}
-		fmt.Fprintf(stderr, "неизвестная команда %q (есть healthcheck и migrate)\n", args[0])
+		fmt.Fprintf(stderr, "неизвестная команда %q (есть healthcheck, migrate и seed)\n", args[0])
 		return 2
 	}
 

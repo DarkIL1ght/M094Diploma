@@ -1,0 +1,44 @@
+[
+  {
+    "ext_id": "tgo-q-up-down",
+    "topic": "tgo-percent",
+    "kind": "single",
+    "text_md": "Цену ноутбука подняли на 20%, а через месяц снизили на 20%. Как изменилась цена по сравнению с исходной?",
+    "explanation_md": "Изменения перемножаются: `1,2 · 0,8 = 0,96`. Цена стала на 4% ниже исходной.",
+    "section": "tgo-percent-basics",
+    "options": [
+      {"ext_id": "a", "text_md": "Не изменилась", "is_correct": false},
+      {"ext_id": "b", "text_md": "Снизилась на 4%", "is_correct": true},
+      {"ext_id": "c", "text_md": "Выросла на 4%", "is_correct": false},
+      {"ext_id": "d", "text_md": "Снизилась на 2%", "is_correct": false}
+    ]
+  },
+  {
+    "ext_id": "tgo-q-share-of-group",
+    "topic": "tgo-percent",
+    "kind": "single",
+    "text_md": "В группе 25 студентов, 9 из них сдали экзамен на «отлично». Какой это процент группы?",
+    "explanation_md": "`9 / 25 = 0,36`, то есть 36%.",
+    "section": "tgo-percent-basics",
+    "options": [
+      {"ext_id": "a", "text_md": "9%", "is_correct": false},
+      {"ext_id": "b", "text_md": "25%", "is_correct": false},
+      {"ext_id": "c", "text_md": "36%", "is_correct": true},
+      {"ext_id": "d", "text_md": "40%", "is_correct": false}
+    ]
+  },
+  {
+    "ext_id": "tgo-q-original-price",
+    "topic": "tgo-percent",
+    "kind": "single",
+    "text_md": "После скидки 25% куртка стоит 18 000 тенге. Сколько она стоила до скидки?",
+    "explanation_md": "После скидки осталось 75% цены: `x · 0,75 = 18 000`, откуда `x = 24 000` тенге. Частая ошибка — прибавить 25% к новой цене и получить 22 500.",
+    "section": "tgo-percent-basics",
+    "options": [
+      {"ext_id": "a", "text_md": "22 500 тенге", "is_correct": false},
+      {"ext_id": "b", "text_md": "24 000 тенге", "is_correct": true},
+      {"ext_id": "c", "text_md": "23 000 тенге", "is_correct": false},
+      {"ext_id": "d", "text_md": "27 000 тенге", "is_correct": false}
+    ]
+  }
+]
