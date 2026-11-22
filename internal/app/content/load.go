@@ -2,6 +2,7 @@ package content
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"strings"
@@ -13,11 +14,18 @@ type Store interface {
 	Replace(ctx context.Context, s Seed) (Report, error)
 }
 
-// Load читает и проверяет seed из fsys и записывает его в store. Неверный seed в хранилище не попадает.
+// ErrEmptySeed — в seed нет ни тем, ни вопросов. Обычно это неверный путь или пустой каталог в образе: такая загрузка
+// вывела бы из оборота весь контент, поэтому она отклоняется.
+var ErrEmptySeed = errors.New("seed пуст: нет ни тем, ни вопросов (проверьте путь к каталогу)")
+
+// Load читает и проверяет seed из fsys и записывает его в store. Неверный или пустой seed в хранилище не попадает.
 func Load(ctx context.Context, fsys fs.FS, store Store) (Report, error) {
 	s, err := Read(fsys)
 	if err != nil {
 		return Report{}, err
+	}
+	if len(s.Topics) == 0 && len(s.Questions) == 0 {
+		return Report{}, ErrEmptySeed
 	}
 	return store.Replace(ctx, s)
 }

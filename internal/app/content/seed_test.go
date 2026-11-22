@@ -2,6 +2,7 @@ package content_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -164,5 +165,13 @@ func TestReportString(t *testing.T) {
 	}
 	if !r.Changed() || (content.Report{Topics: content.Counts{Unchanged: 5}}).Changed() {
 		t.Error("Changed — были ли изменения")
+	}
+}
+
+// Пустой seed (неверный путь, пустой COPY в образе) вывел бы из оборота весь контент — загрузка отказывает.
+func TestLoadRefusesEmptySeed(t *testing.T) {
+	st := &fakeStore{}
+	if _, err := content.Load(context.Background(), fstest.MapFS{}, st); !errors.Is(err, content.ErrEmptySeed) || st.calls != 0 {
+		t.Fatalf("пустой seed: ошибка %v, записей %d", err, st.calls)
 	}
 }
