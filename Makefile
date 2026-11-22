@@ -12,7 +12,10 @@ COMPOSE  := docker compose $(PROFILES)
 help: ## список команд
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-14s %s\n", $$1, $$2}'
 
-up: ## поднять всё: база, приложение (если есть), мок API (если есть)
+up: ## поднять всё: база, миграции, приложение (если есть), мок API (если есть)
+	$(COMPOSE) up -d --build --wait db
+	@# сервер не стартует со старой схемой (B-04): сначала миграции тем же образом, что и в выкатке
+	@$(if $(wildcard Dockerfile),$(COMPOSE) run --rm --build app migrate up,true)
 	$(COMPOSE) up -d --build --wait
 	@echo "база:  $(DB_URL)"
 	@$(if $(wildcard Dockerfile),echo "сайт:  http://localhost:8080",true)

@@ -14,7 +14,7 @@
 Нужны Docker (compose v2) и make. На Windows make — `winget install ezwinports.make` или WSL.
 
 ```
-make up      # база Postgres 18 на localhost:5433; сайт на :8080, когда есть Dockerfile; мок API (Prism) на :4010, когда есть api/openapi.yaml
+make up      # база Postgres 18 на localhost:5433 и её миграции; сайт на :8080, когда есть Dockerfile; мок API (Prism) на :4010, когда есть api/openapi.yaml
 make migrate-up  # схема базы: применить новые миграции (migrate-down — откатить последнюю, migrate-status — что применено)
 make run     # сервер без Docker на :8080 (логи текстом)
 make test    # Go-тесты с этой базой
