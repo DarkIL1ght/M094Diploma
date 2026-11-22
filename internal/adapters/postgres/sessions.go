@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -113,28 +115,40 @@ func (s *SessionStore) DeleteExpired(ctx context.Context, before time.Time) (int
 	return deleted, err
 }
 
-// DeleteUnused удаляет пустые сессии: ключа нет, первый вход не пройден, ни одним токеном не пользовались после
-// выдачи и нет ни одной строки прогресса. Последнее важно: визит продлевается только через час, и студент,
-// занимавшийся меньше часа, выглядел бы по токену нетронутым. Задания дня (daily_tasks) прогрессом не считаются:
-// их создаёт сам сервер при первом запросе дня.
-func (s *SessionStore) DeleteUnused(ctx context.Context, createdBefore time.Time) (int, error) {
-	tag, err := s.pool.Exec(ctx, `
-		delete from sessions s
+// progressTables — таблицы пользователя, строка в любой из которых значит, что сессия не пустая. Новая таблица со
+// ссылкой на sessions обязана попасть сюда или в notProgressTables: это проверяет тест по pg_constraint, иначе сессию
+// с прогрессом только в новой таблице очистка удалила бы как пустую (а прогресс — каскадом).
+var progressTables = []string{
+	"progress", "xp_daily", "section_marks", "question_progress", "test_attempts", "kt_attempts",
+	"achievements", "cosmetic_unlocks", "daily_chests", "plan_tasks", "ai_chats", "ai_usage_daily", "notifications",
+}
+
+// notProgressTables — таблицы со ссылкой на sessions, которые прогрессом не считаются: токены проверяются отдельно,
+// задания дня создаёт сам сервер при первом запросе дня.
+var notProgressTables = []string{"session_tokens", "daily_tasks"}
+
+// deleteUnusedSQL собирается один раз из progressTables (имена — константы из кода, не ввод пользователя).
+var deleteUnusedSQL = func() string {
+	var b strings.Builder
+	b.WriteString(`delete from sessions s
 		where s.created_at < $1
 		  and s.recovery_key_hash is null
 		  and not s.onboarded
-		  and not exists (select 1 from session_tokens t where t.session_id = s.id and t.last_seen_at <> t.created_at)
-		  and not exists (select 1 from progress p where p.session_id = s.id)
-		  and not exists (select 1 from xp_daily x where x.session_id = s.id)
-		  and not exists (select 1 from section_marks m where m.session_id = s.id)
-		  and not exists (select 1 from question_progress q where q.session_id = s.id)
-		  and not exists (select 1 from test_attempts a where a.session_id = s.id)
-		  and not exists (select 1 from kt_attempts k where k.session_id = s.id)
-		  and not exists (select 1 from achievements a where a.session_id = s.id)
-		  and not exists (select 1 from cosmetic_unlocks c where c.session_id = s.id)
-		  and not exists (select 1 from daily_chests d where d.session_id = s.id)
-		  and not exists (select 1 from plan_tasks p where p.session_id = s.id)
-		  and not exists (select 1 from ai_chats c where c.session_id = s.id)`, createdBefore)
+		  and not exists (select 1 from session_tokens t where t.session_id = s.id and t.last_seen_at <> t.created_at)`)
+	for _, table := range progressTables {
+		fmt.Fprintf(&b, "\n\t\t  and not exists (select 1 from %s x where x.session_id = s.id)", table)
+	}
+	return b.String()
+}()
+
+// DeleteUnused удаляет пустые сессии: ключа нет, первый вход не пройден, ни одним токеном не пользовались после
+// выдачи и нет ни одной строки в progressTables. Последнее важно: визит продлевается только через час, и студент,
+// занимавшийся меньше часа, выглядел бы по токену нетронутым.
+//
+// Известная гонка (docs/architecture.md): в READ COMMITTED подзапросы not exists не перепроверяются после ожидания
+// блокировки строки sessions, поэтому прогресс, записанный ровно во время очистки, может уйти вместе с сессией.
+func (s *SessionStore) DeleteUnused(ctx context.Context, createdBefore time.Time) (int, error) {
+	tag, err := s.pool.Exec(ctx, deleteUnusedSQL, createdBefore)
 	if err != nil {
 		return 0, err
 	}

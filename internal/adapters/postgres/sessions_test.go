@@ -35,14 +35,16 @@ func TestDeleteUnusedKeepsSessionsWithProgress(t *testing.T) {
 	st := postgres.NewSessionStore(pool)
 	ctx := context.Background()
 	marks := map[string]string{
-		"onboarded":   `update sessions set onboarded = true where id = $1`,
-		"progress":    `insert into progress (session_id, xp) values ($1, 10)`,
-		"xp_daily":    `insert into xp_daily (session_id, day, xp) values ($1, '2026-11-17', 10)`,
-		"test":        `insert into test_attempts (session_id, mode, title, started_at) values ($1, 'mixed', 'Тест', now())`,
-		"kt":          `insert into kt_attempts (session_id, track, started_at, deadline_at, max_points) values ($1, 'profile', now(), now() + interval '1 hour', 70)`,
-		"plan":        `insert into plan_tasks (session_id, day, position, kind, title) values ($1, '2026-11-17', 1, 'lesson', 'Урок')`,
-		"ai_chat":     `insert into ai_chats (session_id, title, created_at, updated_at) values ($1, 'Чат', now(), now())`,
-		"achievement": `insert into achievements (session_id, achievement_id, level, unlocked_at, updated_at) values ($1, 'first', 1, now(), now())`,
+		"onboarded":    `update sessions set onboarded = true where id = $1`,
+		"progress":     `insert into progress (session_id, xp) values ($1, 10)`,
+		"xp_daily":     `insert into xp_daily (session_id, day, xp) values ($1, '2026-11-17', 10)`,
+		"test":         `insert into test_attempts (session_id, mode, title, started_at) values ($1, 'mixed', 'Тест', now())`,
+		"kt":           `insert into kt_attempts (session_id, track, started_at, deadline_at, max_points) values ($1, 'profile', now(), now() + interval '1 hour', 70)`,
+		"plan":         `insert into plan_tasks (session_id, day, position, kind, title) values ($1, '2026-11-17', 1, 'lesson', 'Урок')`,
+		"ai_chat":      `insert into ai_chats (session_id, title, created_at, updated_at) values ($1, 'Чат', now(), now())`,
+		"achievement":  `insert into achievements (session_id, achievement_id, level, unlocked_at, updated_at) values ($1, 'first', 1, now(), now())`,
+		"notification": `insert into notifications (session_id, type, created_at, xp) values ($1, 'xp', now(), 10)`,
+		"ai_usage":     `insert into ai_usage_daily (session_id, day, requests) values ($1, '2026-11-17', 1)`,
 	}
 	newEmpty(t, pool, st, "empty")
 	for id, sql := range marks {
