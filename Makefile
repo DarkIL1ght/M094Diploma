@@ -1,6 +1,6 @@
 # S-02. Команды разработки. Нужны Docker с compose v2 и make
 # (Windows: make из Git for Windows SDK, `winget install ezwinports.make` или WSL).
-.PHONY: help up down reset logs ps psql test lint fmt run build migrate-up migrate-down migrate-status
+.PHONY: help up down reset logs ps psql test lint fmt run build migrate-up migrate-down migrate-status seed
 
 DB_PORT ?= 5433
 DB_URL  := postgres://m094:m094@localhost:$(DB_PORT)/m094?sslmode=disable
@@ -47,6 +47,9 @@ migrate-down: ## откатить последнюю миграцию
 
 migrate-status: ## какие миграции применены
 	DATABASE_URL='$(DB_URL)' go run ./cmd/server migrate status
+
+seed: ## загрузить учебный контент из content/seed в локальную базу (после make migrate-up)
+	DATABASE_URL='$(DB_URL)' go run ./cmd/server seed
 
 run: ## сервер на :8080 без Docker (логи для чтения глазами)
 	LOG_FORMAT=text go run ./cmd/server
