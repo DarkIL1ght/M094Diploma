@@ -55,15 +55,15 @@ func browser(t *testing.T) *http.Client {
 	return &http.Client{Jar: jar}
 }
 
-func call(t *testing.T, c *http.Client, method, url, body string, hdr map[string]string) (*http.Response, []byte) {
-	t.Helper()
+// doRequest выполняет запрос и не трогает *testing.T: его можно вызывать из горутин, где t.Fatal запрещён.
+func doRequest(c *http.Client, method, url, body string, hdr map[string]string) (*http.Response, []byte, error) {
 	var rd io.Reader
 	if body != "" {
 		rd = strings.NewReader(body)
 	}
 	req, err := http.NewRequest(method, url, rd)
 	if err != nil {
-		t.Fatal(err)
+		return nil, nil, err
 	}
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
@@ -73,10 +73,20 @@ func call(t *testing.T, c *http.Client, method, url, body string, hdr map[string
 	}
 	resp, err := c.Do(req)
 	if err != nil {
-		t.Fatal(err)
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
+	b, err := io.ReadAll(resp.Body)
+	return resp, b, err
+}
+
+// call — doRequest для основной горутины теста: ошибка сразу останавливает тест.
+func call(t *testing.T, c *http.Client, method, url, body string, hdr map[string]string) (*http.Response, []byte) {
+	t.Helper()
+	resp, b, err := doRequest(c, method, url, body, hdr)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return resp, b
 }
 
@@ -434,7 +444,12 @@ func TestRestoreLimitHoldsUnderConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			resp, _ := call(t, &http.Client{}, http.MethodPost, srv.URL+"/api/session/restore", `{"key":"ZZZZ-ZZZZ-ZZZZ-ZZZZ"}`, nil)
+			resp, _, err := doRequest(&http.Client{}, http.MethodPost, srv.URL+"/api/session/restore", `{"key":"ZZZZ-ZZZZ-ZZZZ-ZZZZ"}`, nil)
+			if err != nil {
+				t.Error(err) // из горутины только Error: Fatal остановил бы её молча
+				other.Add(1)
+				return
+			}
 			switch resp.StatusCode {
 			case 404:
 				notFound.Add(1)

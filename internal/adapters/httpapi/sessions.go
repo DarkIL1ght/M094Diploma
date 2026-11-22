@@ -220,9 +220,10 @@ func (a *Sessions) clientIP(r *http.Request) string {
 // limitKey — ключ для ограничения частоты: IPv4 как есть, IPv6 по префиксу /64. Одному клиенту провайдер
 // выдаёт целую подсеть /64, и по отдельным адресам лимит обходился бы сменой адреса внутри неё.
 func (a *Sessions) limitKey(r *http.Request) string {
-	ip := net.ParseIP(a.clientIP(r))
+	addr := a.clientIP(r)
+	ip := net.ParseIP(addr)
 	if ip == nil {
-		return a.clientIP(r)
+		return addr
 	}
 	if v4 := ip.To4(); v4 != nil {
 		return v4.String()
